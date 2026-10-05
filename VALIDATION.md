@@ -14,3 +14,5 @@ Performed on 2026-10-05 with Node.js 24.19.0 on Linux.
 The included 16-line client example passed type checking and produced an assignment hotspot at `client.ts:16:14`. One TypeScript 5.9.3 run recorded 38.4 ms for this check and a contained 31.8 ms `FullClient` to `PublicClient` comparison, resolved to declarations at lines 8 and 11. The README image uses that run. These are inclusive sampled intervals; their sum is not total cost, and they vary between runs.
 
 The GitHub Actions workflow is configured for Linux, Windows, and macOS on Node 20, 22, and 24, plus a TypeScript 6 job. Local validation does not establish performance gains on any third-party repository. The MBD feedback motivated this change; MBD has not been rerun with v0.2.0 in this workspace.
+
+The first hosted run passed Linux, Windows, and TypeScript 6 checks. macOS exposed canonical trace path casing in relative filenames; trace locations now use the matched source file's original path, and the casing regression checks file intervals, source checks, and type declarations.

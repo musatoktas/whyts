@@ -40,11 +40,13 @@ function milliseconds(ranges) {
   return (total + right - left) / 1000;
 }
 
-function fileIntervals(spans, base, include = () => true) {
+function fileIntervals(spans, base, graph, include = () => true) {
   const files = new Map();
   for (const span of spans) {
     if (span.name !== 'checkSourceFile' || typeof span.args?.path !== 'string') continue;
-    const file = path.resolve(base, span.args.path);
+    const recordedFile = path.resolve(base, span.args.path);
+    const source = graph ? findSource(recordedFile, graph) : null;
+    const file = source ? path.resolve(source.fileName) : recordedFile;
     if (!include(file)) continue;
     if (!files.has(file)) files.set(file, []);
     files.get(file).push([span.ts, span.end]);
@@ -82,7 +84,7 @@ function sourceLocation(span, base, graph) {
   visit(source);
   const location = source.getLineAndCharacterOfPosition(start);
   const text = source.text.slice(start, end).replace(/\s+/g, ' ').trim();
-  return { file: display(base, file), line: location.line + 1, character: location.character + 1,
+  return { file: display(base, path.resolve(source.fileName)), line: location.line + 1, character: location.character + 1,
     pos, end, syntaxKind: span.args.kind, scope: scope(file, graph),
     snippet: clean(text.slice(0, 240)) + (text.length > 240 ? '…' : '') };
 }
@@ -110,7 +112,7 @@ function describeType(id, types, base, graph) {
       const location = source.getLineAndCharacterOfPosition(Math.min(pos, source.text.length));
       line = location.line + 1; character = location.character + 1;
     }
-    result.declaration = { file: display(base, file), line, character, scope: scope(file, graph) };
+    result.declaration = { file: display(base, source ? path.resolve(source.fileName) : file), line, character, scope: scope(file, graph) };
   }
   return result;
 }
@@ -157,7 +159,7 @@ export function traceDetails(events, descriptors, base, graph) {
     .sort(rank).slice(0, 5).map(group => ({ ...sourceLocation(group.span, base, graph), event: group.span.name,
       milliseconds: group.milliseconds, comparisons: orderedComparisons(group.comparisons).slice(0, 3).map(describeComparison) }));
   const typeHotspots = orderedComparisons(comparisons).slice(0, 5).map(describeComparison);
-  const files = fileIntervals(spans, base);
+  const files = fileIntervals(spans, base, graph);
   return { hotspots: files.slice(0, 5),
-    projectHotspots: fileIntervals(spans, base, file => scope(file, graph) === 'project').slice(0, 5), sourceHotspots, typeHotspots };
+    projectHotspots: fileIntervals(spans, base, graph, file => scope(file, graph) === 'project').slice(0, 5), sourceHotspots, typeHotspots };
 }

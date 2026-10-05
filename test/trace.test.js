@@ -133,11 +133,17 @@ test('canonical trace paths are looked up through the compiler when graph casing
   const lookup = graph.program.getSourceFile.bind(graph.program);
   graph.program.getSourceFile = file => file === canonical ? source : lookup(file);
   const result = traceDetails([event('checkVariableDeclaration', 0, 30000, { ...args, path: canonical }),
-    event('checkSourceFile', 0, 40000, { path: canonical })], [], base, graph);
+    event('checkSourceFile', 0, 40000, { path: canonical }),
+    event('structuredTypeRelatedTo', 1000, 20000, { sourceId: 1, targetId: 2 })],
+    [{ id: 1, symbolName: 'Source', firstDeclaration: { path: canonical, start: { line: 1, character: 1 } } }], base, graph);
   assert.equal(result.sourceHotspots.length, 1);
   assert.equal(result.sourceHotspots[0].line, 4);
   assert.equal(result.sourceHotspots[0].scope, 'project');
+  assert.equal(result.sourceHotspots[0].file, 'main.ts');
   assert.equal(result.projectHotspots.length, 1);
+  assert.equal(result.projectHotspots[0].file, 'main.ts');
+  assert.equal(result.hotspots[0].file, 'main.ts');
+  assert.equal(result.sourceHotspots[0].comparisons[0].source.declaration.file, 'main.ts');
 });
 
 test('real compiler example keeps measured findings ahead of heuristics and resolves any sampled comparisons', async () => {
