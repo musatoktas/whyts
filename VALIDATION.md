@@ -1,18 +1,33 @@
-# v0.2.0 validation
+# v0.3.0 validation
 
 Performed on 2026-10-05 with Node.js 24.19.0 on Linux.
 
-- Syntax checks passed for all four source modules.
-- All 18 tests passed with TypeScript 5.9.3.
-- The same 18 tests passed in a separate checkout with TypeScript 6.0.3.
-- The packed CLI was installed separately, printed version 0.2.0, and produced valid JSON with a successful client-example check and the new source/type data.
-- Parser tests cover out-of-order complete events, thread-isolated begin/end pairs, overlapping intervals, nested source context, missing type descriptors, invalid offsets, canonical path casing, and project/dependency prioritization.
-- Barrel root-overlap tests prevent suggesting a direct import when every reached file is already a configured root. Terminal tests check measured-first output and control-character sanitization.
-- A real compiler run preserved an existing tsbuildinfo cache and did not add build outputs to the project.
-- Compiler errors, invalid arguments, missing projects/files, and a compiler timeout were exercised.
+- Syntax checks passed for all five source modules.
+- All 25 tests passed with TypeScript 5.9.3 and in a separate checkout with TypeScript 6.0.3.
+- The packed CLI installed successfully offline in a separate directory, printed version 0.3.0 and emitted valid JSON with the new chain and descriptor fields for the client example.
+- Seven added regression tests cover same-thread temporal grouping, deferred source positions, file/thread isolation, inclusive interval unions, selected comparison hydration, leading comments/CRLF, UTF-8 chunk boundaries, missing/malformed descriptor files, and record/retention/scan budgets.
+- A sparse file larger than 128 MiB resolves its selected descriptor after reading at most one 64 KiB chunk. The tail is deliberately not parsed once selection is complete.
+- Existing real-compiler, config/import, canonical path casing, project/dependency prioritization, cache preservation, compiler-error, timeout, JSON and terminal-sanitization checks still pass.
 
-The included 16-line client example passed type checking and produced an assignment hotspot at `client.ts:16:14`. One TypeScript 5.9.3 run recorded 38.4 ms for this check and a contained 31.8 ms `FullClient` to `PublicClient` comparison, resolved to declarations at lines 8 and 11. The README image uses that run. These are inclusive sampled intervals; their sum is not total cost, and they vary between runs.
+## Saved real-project trace replay
 
-The GitHub Actions workflow is configured for Linux, Windows, and macOS on Node 20, 22, and 24, plus a TypeScript 6 job. Local validation does not establish performance gains on any third-party repository. The MBD feedback motivated this change; MBD has not been rerun with v0.2.0 in this workspace.
+The unmodified baseline trace and type-descriptor files from a private case-study archive were replayed through the v0.3 parser. Private source, filenames and raw trace/type contents are excluded from this repository.
 
-The first hosted run passed Linux, Windows, and TypeScript 6 checks. macOS exposed canonical trace path casing in relative filenames; trace locations now use the matched source file's original path, and the casing regression checks file intervals, source checks, and type declarations.
+- Trace: 6,221,754 bytes and 31,507 events.
+- Type descriptors: 163,350,312 bytes. Version 0.2 skipped this file because it exceeded 128 MiB.
+- All 15 selected type IDs resolved, including both sides of all five global comparisons, with no descriptor warnings.
+- 46,202,880 bytes were scanned before selection completed; 5,008 bytes of descriptor JSON were retained.
+- The legacy top-five individual source checks all came from one file. The new top-five chains covered three files, with 8, 2, 5, 3 and 3 recorded source members respectively.
+- The largest chain's inclusive duration was 1,232.98 ms, counted once rather than summed across its eight members.
+
+One local replay took about 581 ms for descriptor loading. Peak RSS for the whole replay process (including the parsed trace and grouping) was 148,128 KiB. These describe one parser run, not a compiler speedup, a stable benchmark or a 5 KB process-memory claim.
+
+The full private project's source and dependencies were unavailable locally. This replay therefore verifies descriptor resolution and temporal grouping; source locations stay unavailable and declaration locations are labeled raw trace positions. Comment-aware definition normalization is verified using compiler-backed fixtures and must also be checked in the live project rerun.
+
+A fresh live-project rerun is still required to assess actionable findings or additional compiler performance gains. The tool never edits that project. Compare candidate code against a fixed baseline using the same compiler/cache/flags and correctness checks, and counterbalance run order.
+
+## Hosted validation
+
+GitHub Actions is configured for Linux, Windows and macOS on Node 20, 22 and 24, plus a TypeScript 6 job. Hosted results for this change are pending.
+
+The README image retains an earlier TypeScript 5.9.3 example run: 38.4 ms for the client assignment and 31.8 ms for its contained comparison. It is an illustrative sampled result, not a v0.3 benchmark.

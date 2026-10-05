@@ -4,7 +4,8 @@ import os from 'node:os';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
-import { traceDetails } from './trace.js';
+import { traceDetails, selectedTypeIds, resolveTraceTypes } from './trace.js';
+import { readTypeDescriptors } from './types.js';
 export { traceHotspots } from './trace.js';
 
 const require = createRequire(import.meta.url);
@@ -110,7 +111,7 @@ export function buildGraph(ts, project) {
       barrels.push({ file, reexports });
     }
   }
-  return { program, files, edges, incoming, barrels, roots: new Set(parsed.fileNames.map(f => path.resolve(f))) };
+  return { ts, program, files, edges, incoming, barrels, roots: new Set(parsed.fileNames.map(f => path.resolve(f))) };
 }
 
 export function reachable(edges, start) {
@@ -257,29 +258,23 @@ export async function analyze(options = {}) {
     const diagnostics = parseDiagnostics(run.stdout);
     if (!Object.keys(diagnostics).length) throw new Error(`Compiler produced no diagnostics. ${clean((run.stderr || run.stdout).slice(0, 2000))}`);
     const traceFile = path.join(temporary, 'trace.json');
-    let hotspots = [], sourceHotspots = [], typeHotspots = [], projectHotspots = [];
+    let hotspots = [], sourceHotspots = [], sourceGroups = [], typeHotspots = [], projectHotspots = [], typeDescriptors = null;
     const traceWarnings = [];
     if (fs.existsSync(traceFile)) {
       if (fs.statSync(traceFile).size <= 128 * 1024 * 1024) {
-        let descriptors = [];
-        const typesFile = path.join(temporary, 'types.json');
-        if (fs.existsSync(typesFile) && fs.statSync(typesFile).size <= 128 * 1024 * 1024) {
-          try {
-            descriptors = JSON.parse(fs.readFileSync(typesFile, 'utf8'));
-            if (!Array.isArray(descriptors)) throw new Error('Expected a type descriptor array');
-          } catch { descriptors = []; traceWarnings.push('Type descriptors could not be parsed; type IDs remain available.'); }
-        } else traceWarnings.push('Type descriptors are missing or exceed 128 MiB; type IDs remain available.');
         try {
-          ({ hotspots, projectHotspots, sourceHotspots, typeHotspots } = traceDetails(
-            JSON.parse(fs.readFileSync(traceFile, 'utf8')), descriptors, project.base, graph));
+          const details = traceDetails(JSON.parse(fs.readFileSync(traceFile, 'utf8')), [], project.base, graph);
+          const loaded = await readTypeDescriptors(path.join(temporary, 'types.json'), selectedTypeIds(details));
+          typeDescriptors = loaded.stats; traceWarnings.push(...loaded.warnings);
+          ({ hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots } = resolveTraceTypes(details, loaded.descriptors, project.base, graph));
         } catch { traceWarnings.push('Trace could not be parsed. Other diagnostics remain available.'); }
       } else traceWarnings.push('Trace exceeds 128 MiB; hotspot parsing skipped to bound memory usage.');
     } else traceWarnings.push('Compiler did not emit a trace; no hotspot measurements are available.');
-    for (const hotspot of sourceHotspots.filter(h => h.milliseconds >= 10)) findings.push({
-      rule: 'source-hotspot', confidence: 'measured', title: `${hotspot.file}:${hotspot.line}:${hotspot.character}: ${hotspot.milliseconds.toFixed(1)} ms recorded ${hotspot.event}`,
+    for (const hotspot of sourceGroups.filter(h => h.milliseconds >= 10)) findings.push({
+      rule: 'source-check-chain', confidence: 'measured', title: `${hotspot.file}:${hotspot.line}:${hotspot.character}: ${hotspot.milliseconds.toFixed(1)} ms recorded check chain (${hotspot.memberCount} source checks)`,
       evidence: hotspot, suggestion: hotspot.comparisons.length
-        ? 'Start with this expression and the listed type declarations. Comparisons were recorded inside this check; inclusive samples do not prove a cause or predict savings. Validate behavior and remeasure any change.'
-        : 'Start with this expression. No type comparison was recorded inside this sampled span; the trace does not establish the expensive type. Validate behavior and remeasure any change.'
+        ? 'Inspect the focus expression, related checks and listed type declarations. Comparisons were recorded inside this chain; inclusive samples do not prove a cause or predict savings. Validate behavior and remeasure any change.'
+        : 'Inspect the focus expression and related checks. No type comparison was recorded inside this sampled chain; the trace does not establish the expensive type. Validate behavior and remeasure any change.'
     });
     const filesToReview = [...projectHotspots, ...hotspots.filter(h => !projectHotspots.some(p => p.file === h.file))].slice(0, 5);
     for (const hotspot of filesToReview.filter(h => h.milliseconds >= 100)) findings.push({
@@ -288,12 +283,12 @@ export async function analyze(options = {}) {
     });
     const confidenceRank = { measured: 0, observed: 1, review: 2 };
     findings.sort((a, b) => confidenceRank[a.confidence] - confidenceRank[b.confidence]);
-    return { schemaVersion: 1, toolVersion: '0.2.0', typescriptVersion: compiler.ts.version,
+    return { schemaVersion: 1, toolVersion: '0.3.0', typescriptVersion: compiler.ts.version,
       project: display(process.cwd(), project.configPath),
       summary: { programFiles: graph.files.size, rootFiles: graph.roots.size, compilerExitCode: run.exitCode,
         errorCount: (run.stdout.match(/\berror TS\d+:/g) ?? []).length, wallMilliseconds,
         mode: 'fresh-cache, no-emit, tracing enabled', analysisOverheadExcluded: true },
-      diagnostics, findings, hotspots, projectHotspots, sourceHotspots, typeHotspots, warnings: [...traceWarnings,
+      diagnostics, findings, hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots, typeDescriptors, warnings: [...traceWarnings,
         project.parsed.projectReferences?.length ? 'Referenced projects are not built; existing declaration outputs may be required.' : null,
         'Tracing adds overhead. Compare timings using the same compiler, cache mode, and tracing settings.'
       ].filter(Boolean) };
