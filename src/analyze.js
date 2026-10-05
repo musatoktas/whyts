@@ -4,6 +4,8 @@ import os from 'node:os';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
+import { traceDetails } from './trace.js';
+export { traceHotspots } from './trace.js';
 
 const require = createRequire(import.meta.url);
 const slash = p => p.split(path.sep).join('/');
@@ -181,39 +183,6 @@ function runCompiler(tscPath, args, cwd, timeoutMs) {
   });
 }
 
-// Trace durations are inclusive. Merge overlapping intervals rather than double-counting.
-export function traceHotspots(events, base) {
-  const stacks = new Map();
-  const intervals = new Map();
-  const record = (event, end) => {
-    const file = event.args?.path;
-    if (event.name !== 'checkSourceFile' || !file || !Number.isFinite(event.ts) || !Number.isFinite(end) || end < event.ts) return;
-    if (!intervals.has(file)) intervals.set(file, []);
-    intervals.get(file).push([event.ts, end]);
-  };
-  for (const event of events) {
-    const key = `${event.pid}:${event.tid}`;
-    if (event.ph === 'X' && Number.isFinite(event.dur)) record(event, event.ts + event.dur);
-    else if (event.ph === 'B') {
-      if (!stacks.has(key)) stacks.set(key, []);
-      stacks.get(key).push(event);
-    } else if (event.ph === 'E') {
-      const start = stacks.get(key)?.pop();
-      if (start) record(start, event.ts);
-    }
-  }
-  return [...intervals].map(([file, ranges]) => {
-    ranges.sort((a, b) => a[0] - b[0]);
-    let total = 0, left = ranges[0][0], right = ranges[0][1];
-    for (const [a, b] of ranges.slice(1)) {
-      if (a <= right) right = Math.max(right, b);
-      else { total += right - left; left = a; right = b; }
-    }
-    total += right - left;
-    return { file: display(base, path.resolve(file)), milliseconds: total / 1000 };
-  }).sort((a, b) => b.milliseconds - a.milliseconds);
-}
-
 function duplicateTypes(graph, base) {
   const packages = new Map();
   const visited = new Set();
@@ -252,13 +221,20 @@ export function inspectProject(graph, project) {
   }
   // Bound graph traversals for large repositories. Candidates ranked by export count.
   const barrels = graph.barrels.sort((a, b) => b.reexports - a.reexports).slice(0, 40)
-    .map(barrel => ({ ...barrel, reachableFiles: reachable(graph.edges, barrel.file).size }))
+    .map(barrel => {
+      const files = reachable(graph.edges, barrel.file);
+      return { ...barrel, reachableFiles: files.size, alreadyRootFiles: [...files].filter(f => graph.roots.has(f)).length };
+    })
     .sort((a, b) => b.reachableFiles - a.reachableFiles);
   for (const barrel of barrels.slice(0, 5)) findings.push({ rule: 'barrel-reach', confidence: 'observed',
     title: `${display(base, barrel.file)} reaches ${barrel.reachableFiles} files`,
     evidence: { file: display(base, barrel.file), reexports: barrel.reexports, reachableFiles: barrel.reachableFiles,
-      directImporters: graph.incoming.get(barrel.file)?.size ?? 0 },
-    suggestion: 'Try importing the needed module directly, then compare fresh checks. Reachability includes type-only edges and does not measure exclusive cost or runtime bundle size.' });
+      directImporters: graph.incoming.get(barrel.file)?.size ?? 0, alreadyRootFiles: barrel.alreadyRootFiles },
+    suggestion: barrel.alreadyRootFiles === barrel.reachableFiles
+      ? 'All reached files are already configured roots. Changing this barrel import alone will not remove them from the program. Reach is structural context, not measured cost.'
+      : !graph.incoming.get(barrel.file)?.size
+        ? 'No direct importers were observed. Review why this barrel is included before proposing direct imports. Reach is structural context, not measured cost.'
+        : 'Try importing the needed module directly, then compare fresh checks. Other roots and importers may still load these files; reach does not measure exclusive cost or runtime bundle size.' });
   return findings;
 }
 
@@ -281,23 +257,43 @@ export async function analyze(options = {}) {
     const diagnostics = parseDiagnostics(run.stdout);
     if (!Object.keys(diagnostics).length) throw new Error(`Compiler produced no diagnostics. ${clean((run.stderr || run.stdout).slice(0, 2000))}`);
     const traceFile = path.join(temporary, 'trace.json');
-    let hotspots = [], traceWarning = null;
+    let hotspots = [], sourceHotspots = [], typeHotspots = [], projectHotspots = [];
+    const traceWarnings = [];
     if (fs.existsSync(traceFile)) {
       if (fs.statSync(traceFile).size <= 128 * 1024 * 1024) {
-        try { hotspots = traceHotspots(JSON.parse(fs.readFileSync(traceFile, 'utf8')), project.base).slice(0, 5); }
-        catch { traceWarning = 'Trace could not be parsed. Other diagnostics remain available.'; }
-      } else traceWarning = 'Trace exceeds 128 MiB; hotspot parsing skipped to bound memory usage.';
-    } else traceWarning = 'Compiler did not emit a trace; no hotspot measurements are available.';
-    for (const hotspot of hotspots.filter(h => h.milliseconds >= 100)) findings.push({
+        let descriptors = [];
+        const typesFile = path.join(temporary, 'types.json');
+        if (fs.existsSync(typesFile) && fs.statSync(typesFile).size <= 128 * 1024 * 1024) {
+          try {
+            descriptors = JSON.parse(fs.readFileSync(typesFile, 'utf8'));
+            if (!Array.isArray(descriptors)) throw new Error('Expected a type descriptor array');
+          } catch { descriptors = []; traceWarnings.push('Type descriptors could not be parsed; type IDs remain available.'); }
+        } else traceWarnings.push('Type descriptors are missing or exceed 128 MiB; type IDs remain available.');
+        try {
+          ({ hotspots, projectHotspots, sourceHotspots, typeHotspots } = traceDetails(
+            JSON.parse(fs.readFileSync(traceFile, 'utf8')), descriptors, project.base, graph));
+        } catch { traceWarnings.push('Trace could not be parsed. Other diagnostics remain available.'); }
+      } else traceWarnings.push('Trace exceeds 128 MiB; hotspot parsing skipped to bound memory usage.');
+    } else traceWarnings.push('Compiler did not emit a trace; no hotspot measurements are available.');
+    for (const hotspot of sourceHotspots.filter(h => h.milliseconds >= 10)) findings.push({
+      rule: 'source-hotspot', confidence: 'measured', title: `${hotspot.file}:${hotspot.line}:${hotspot.character}: ${hotspot.milliseconds.toFixed(1)} ms recorded ${hotspot.event}`,
+      evidence: hotspot, suggestion: hotspot.comparisons.length
+        ? 'Start with this expression and the listed type declarations. Comparisons were recorded inside this check; inclusive samples do not prove a cause or predict savings. Validate behavior and remeasure any change.'
+        : 'Start with this expression. No type comparison was recorded inside this sampled span; the trace does not establish the expensive type. Validate behavior and remeasure any change.'
+    });
+    const filesToReview = [...projectHotspots, ...hotspots.filter(h => !projectHotspots.some(p => p.file === h.file))].slice(0, 5);
+    for (const hotspot of filesToReview.filter(h => h.milliseconds >= 100)) findings.push({
       rule: 'check-hotspot', confidence: 'measured', title: `${hotspot.file}: ${hotspot.milliseconds.toFixed(1)} ms recorded check intervals`,
       evidence: hotspot, suggestion: 'Inspect types and declarations in this file. Trace intervals are inclusive samples, not a complete attribution of total check time.'
     });
-    return { schemaVersion: 1, toolVersion: '0.1.0', typescriptVersion: compiler.ts.version,
+    const confidenceRank = { measured: 0, observed: 1, review: 2 };
+    findings.sort((a, b) => confidenceRank[a.confidence] - confidenceRank[b.confidence]);
+    return { schemaVersion: 1, toolVersion: '0.2.0', typescriptVersion: compiler.ts.version,
       project: display(process.cwd(), project.configPath),
       summary: { programFiles: graph.files.size, rootFiles: graph.roots.size, compilerExitCode: run.exitCode,
         errorCount: (run.stdout.match(/\berror TS\d+:/g) ?? []).length, wallMilliseconds,
         mode: 'fresh-cache, no-emit, tracing enabled', analysisOverheadExcluded: true },
-      diagnostics, findings, hotspots, warnings: [traceWarning,
+      diagnostics, findings, hotspots, projectHotspots, sourceHotspots, typeHotspots, warnings: [...traceWarnings,
         project.parsed.projectReferences?.length ? 'Referenced projects are not built; existing declaration outputs may be required.' : null,
         'Tracing adds overhead. Compare timings using the same compiler, cache mode, and tracing settings.'
       ].filter(Boolean) };
