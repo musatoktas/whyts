@@ -42,6 +42,18 @@ test('files larger than 128 MiB resolve selected IDs without reading or retainin
   assert.deepEqual(result.warnings, []);
 });
 
+test('descriptor reading closes its file handle before returning on early selection or EOF', async t => {
+  const file = fixture(t, '[{"id":1},{"id":2}]');
+  const original = fs.createReadStream;
+  let stream;
+  t.mock.method(fs, 'createReadStream', (...args) => { stream = original(...args); return stream; });
+  for (const ids of [[1], [99]]) {
+    await readTypeDescriptors(file, ids, { chunkBytes: 3 });
+    assert.equal(stream.closed, true);
+    assert.equal(stream.fd, null);
+  }
+});
+
 test('missing IDs and missing or malformed files leave explicit warnings and preserve resolved descriptors', async t => {
   const missing = await readTypeDescriptors(fixture(t), [4]);
   assert.deepEqual(missing.descriptors, []);

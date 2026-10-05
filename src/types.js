@@ -73,7 +73,13 @@ export async function readTypeDescriptors(file, ids, options = {}) {
     warnings.push(error.code === 'ENOENT'
       ? 'types.json is missing; type IDs remain available.'
       : `Type descriptor reading failed (${error.code ?? 'invalid JSON'}; file: ${stats.fileBytes ?? 'unknown'} bytes); unresolved IDs remain explicit.`);
-  } finally { stream?.destroy(); }
+  } finally {
+    // Early selection destroys the iterator, but closing its file handle is asynchronous.
+    // Wait before callers remove the trace directory, especially on Windows/Node 20.
+    if (stream && !stream.closed) await new Promise(resolve => {
+      stream.once('close', resolve); stream.destroy();
+    });
+  }
   stats.resolvedIds = descriptors.length;
   return { descriptors, stats, warnings };
 }
