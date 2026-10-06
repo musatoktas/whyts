@@ -60,11 +60,53 @@ export function traceHotspots(events, base) {
 }
 
 // TypeScript trace paths can use canonical casing on case-insensitive hosts.
-const findSource = (file, graph) => graph?.files.get(file) ?? graph?.program.getSourceFile(file);
+const findSource = (file, graph) => graph?.files.get(file) ?? graph?.program.getSourceFile(file) ??
+  (graph?.native ? graph.lowerFiles?.get(file.toLowerCase()) : undefined);
+
+// Native (Go) trace offsets are UTF-8 byte offsets; 5.x/6.x and this tool's AST use UTF-16 code units.
+const byteMaps = new WeakMap();
+function utf16Offset(source, byteOffset) {
+  const text = source.text;
+  let map = byteMaps.get(source);
+  if (map === undefined) {
+    map = null;
+    if (Buffer.byteLength(text) !== text.length) {
+      map = new Map(); let bytes = 0;
+      for (let i = 0; i < text.length; i++) {
+        map.set(bytes, i);
+        const code = text.charCodeAt(i);
+        if (code < 0x80) bytes += 1; else if (code < 0x800) bytes += 2;
+        else if (code >= 0xd800 && code < 0xdc00 && i + 1 < text.length) { bytes += 4; i++; } else bytes += 3;
+      }
+      map.set(bytes, text.length);
+    }
+    byteMaps.set(source, map);
+  }
+  return map === null ? byteOffset : (map.get(byteOffset) ?? -1);
+}
+
+// Convert a native span's byte offsets in place; spans whose offsets are not on a character boundary are dropped.
+function normalizeNative(spans, base, graph) {
+  if (!graph?.native) return spans;
+  const kept = [];
+  for (const span of spans) {
+    if (!sourceChecks.has(span.name)) { kept.push(span); continue; }
+    const source = typeof span.args?.path === 'string' ? findSource(path.resolve(base, span.args.path), graph) : null;
+    if (!source) { kept.push(span); continue; }
+    const pos = utf16Offset(source, span.args.pos), end = utf16Offset(source, span.args.end);
+    if (pos < 0 || end < 0) continue;
+    kept.push({ ...span, args: { ...span.args, pos, end } });
+  }
+  return kept;
+}
+const identifierKind = graph => graph?.native?.identifierKind ?? graph?.ts?.SyntaxKind.Identifier ?? 80;
+
+// The native package bundles its own lib.*.d.ts files, which are not in the JavaScript API's program.
+const nativeLib = /\/@typescript\/typescript-[^/]+\/lib\/lib\.[^/]*\.d\.ts$/i;
 
 function scope(file, graph) {
   const source = findSource(file, graph);
-  if (!source) return 'unknown';
+  if (!source) return graph?.native && nativeLib.test(file.split(path.sep).join('/')) ? 'dependency' : 'unknown';
   return graph.program.isSourceFileDefaultLibrary(source) || graph.program.isSourceFileFromExternalLibrary(source)
     ? 'dependency' : 'project';
 }
@@ -129,7 +171,7 @@ const rank = (a, b) => priority(a) - priority(b) || b.milliseconds - a.milliseco
 
 // A contained comparison is context, not proof that its types cause a slowdown.
 export function traceDetails(events, descriptors, base, graph = null) {
-  const spans = traceSpans(events), sources = new Map(), comparisons = new Map(), contexts = new Map(), chains = new Map();
+  const spans = normalizeNative(traceSpans(events), base, graph), sources = new Map(), comparisons = new Map(), contexts = new Map(), chains = new Map();
   spans.sort((a, b) => a.ts - b.ts || b.end - a.end || Number(sourceChecks.has(b.name)) - Number(sourceChecks.has(a.name)));
   for (const span of spans) {
     const stack = contexts.get(span.thread) ?? [];
@@ -189,7 +231,7 @@ export function traceDetails(events, descriptors, base, graph = null) {
         .sort((a, b) => b.milliseconds - a.milliseconds);
       // Focus on a specific non-identifier check still covering most of this chain's interval.
       const useful = members.filter(m => m.milliseconds >= chain.milliseconds * 0.8 &&
-        m.span.args.kind !== (graph?.ts?.SyntaxKind.Identifier ?? 80));
+        m.span.args.kind !== identifierKind(graph));
       const focus = useful.sort((a, b) => b.depth - a.depth || b.milliseconds - a.milliseconds)[0] ?? members[0];
       const shown = [focus, ...members.filter(m => m !== focus)].slice(0, 5);
       return { ...sourceLocation(focus.span, base, graph), event: focus.span.name, milliseconds: chain.milliseconds,
