@@ -113,6 +113,7 @@ export function buildGraph(ts, project) {
   const edges = new Map();
   const incoming = new Map();
   const barrels = [];
+  const skipped = [];
   const cache = ts.createModuleResolutionCache(base, x => x, parsed.options);
   for (const [file, source] of files) {
     let collected;
@@ -139,7 +140,6 @@ export function buildGraph(ts, project) {
       if (!incoming.has(dep)) incoming.set(dep, new Set());
       incoming.get(dep).add(file);
     }
-  const skipped = [];
     if (reexports >= 3 && !file.includes(`${path.sep}node_modules${path.sep}`)) {
       barrels.push({ file, reexports });
     }
@@ -294,11 +294,15 @@ export function inspectProject(graph, project) {
       evidence: { include: include ?? ['**/* (default)'], rootFiles: graph.roots.size },
       suggestion: 'Review whether include can target source directories. A broad pattern alone does not prove wasted work.' });
   }
-  const candidates = [...graph.roots].filter(file => /(^|\/)(generated|dist|build|coverage|__tests__|tests?)(\/|\.)|\.(test|spec)\.[cm]?[jt]sx?$/.test(slash(path.relative(base, file))))
-    .filter(file => !graph.incoming.get(file)?.size);
-  if (candidates.length) findings.push({ rule: 'review-root-files', confidence: 'review', title: `${candidates.length} generated, output, or test roots have no observed importers`,
-    evidence: { count: candidates.length, files: candidates.slice(0, 20).map(p => display(base, p)) },
-    suggestion: 'Confirm whether these files belong in this check. Use a separate test config or narrower include where appropriate. Unimported roots may still be intentional.' });
+  const unimported = [...graph.roots].filter(file => !graph.incoming.get(file)?.size);
+  const isTest = file => /(^|\/)(__tests__|tests?)\/|\.(test|spec)\.[cm]?[jt]sx?$/.test(slash(path.relative(base, file)));
+  const isOutput = file => /(^|\/)(generated|dist|build|coverage)(\/|\.)/.test(slash(path.relative(base, file)));
+  // Tests are entry points by nature and are never imported, so they are counted instead of listed.
+  const testRoots = unimported.filter(isTest).length;
+  const candidates = unimported.filter(file => !isTest(file) && isOutput(file));
+  if (candidates.length) findings.push({ rule: 'review-root-files', confidence: 'review', title: `${candidates.length} generated or output roots have no observed importers`,
+    evidence: { count: candidates.length, files: candidates.slice(0, 20).map(p => display(base, p)), testRootsExcluded: testRoots },
+    suggestion: 'Confirm whether these files belong in this check. Use a narrower include where appropriate. Unimported roots may still be intentional.' });
   for (const { name, copies } of duplicateTypes(graph, base)) {
     findings.push({ rule: 'duplicate-types', confidence: 'observed', title: `Multiple loaded versions of ${clean(name)}`,
       evidence: { name: clean(name), copies }, suggestion: 'Inspect your package manager dependency tree and align compatible versions. Multiple versions may be required; do not deduplicate blindly.' });
@@ -340,6 +344,13 @@ export async function readTrace(traceFile, temporary, project, graph) {
   return result;
 }
 
+// Inclusive interval as a percentage of tsc's Check time. An upper bound, never a predicted saving:
+// intervals are inclusive samples recorded while tracing, which itself slows the check.
+export function withCheckShare(list, checkSeconds) {
+  return list.map(item => ({ ...item, checkTimeShareUpperBoundPercent: checkSeconds > 0
+    ? Math.round(item.milliseconds / (checkSeconds * 1000) * 1000) / 10 : null }));
+}
+
 export function measuredFindings({ hotspots, projectHotspots, sourceGroups }) {
   const findings = [];
   for (const hotspot of sourceGroups.filter(h => h.milliseconds >= 10)) findings.push({
@@ -375,10 +386,14 @@ export async function analyze(options = {}) {
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_SECONDS * 1000, maxOldSpaceMb: options.maxOldSpaceMb, onProgress: options.onProgress, progressIntervalMs: options.progressIntervalMs });
     const wallMilliseconds = performance.now() - started;
     const diagnostics = parseDiagnostics(run.stdout);
+    const compilerErrors = parseCompilerErrors(run.stdout);
     if (!Object.keys(diagnostics).length) throw new Error(`Compiler produced no diagnostics. ${clean((run.stderr || run.stdout).slice(0, 2000))}`);
     const traceFile = path.join(temporary, 'trace.json');
     const trace = await readTrace(traceFile, temporary, project, graph);
-    const { hotspots, sourceHotspots, sourceGroups, typeHotspots, projectHotspots, typeDescriptors } = trace;
+    const checkSeconds = diagnostics['Check time']?.value;
+    const hotspots = withCheckShare(trace.hotspots, checkSeconds), projectHotspots = withCheckShare(trace.projectHotspots, checkSeconds),
+      sourceHotspots = withCheckShare(trace.sourceHotspots, checkSeconds), sourceGroups = withCheckShare(trace.sourceGroups, checkSeconds);
+    const { typeHotspots, typeDescriptors } = trace;
     const traceWarnings = trace.warnings;
     findings.push(...measuredFindings({ hotspots, projectHotspots, sourceGroups }));
     const confidenceRank = { measured: 0, observed: 1, review: 2 };
@@ -386,7 +401,6 @@ export async function analyze(options = {}) {
     return { schemaVersion: 1, toolVersion, typescriptVersion: compiler.ts.version,
       project: display(process.cwd(), project.configPath),
       summary: { programFiles: graph.files.size, rootFiles: graph.roots.size, compilerExitCode: run.exitCode,
-    const compilerErrors = parseCompilerErrors(run.stdout);
         errorCount: compilerErrors.total, wallMilliseconds, dumpTypesSeconds: diagnostics['Dump types time']?.value ?? null,
         mode: 'fresh-cache, no-emit, tracing enabled', analysisOverheadExcluded: true },
       diagnostics, compilerErrors, findings, hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots, typeDescriptors, warnings: [...traceWarnings,

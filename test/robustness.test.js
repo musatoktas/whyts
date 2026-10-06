@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
-import { analyze, readProject, buildGraph, loadCompiler, parseCompilerErrors, compilerCrashMessage, stderrTail, DEFAULT_TIMEOUT_SECONDS } from '../src/analyze.js';
+import { analyze, readProject, buildGraph, inspectProject, loadCompiler, parseCompilerErrors, compilerCrashMessage,
+  stderrTail, withCheckShare, DEFAULT_TIMEOUT_SECONDS } from '../src/analyze.js';
+import { renderReport } from '../src/report.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const cli = path.join(root, 'src/cli.js');
@@ -197,8 +199,36 @@ test('--typescript selects the compiler and keeps the 5.x/6.x check', t => {
   assert.throws(() => loadCompiler(os.tmpdir(), broken), /Could not load the TypeScript compiler.*cannot start/);
 });
 
+test('inclusive intervals get a check-time share upper bound, null when Check time is unknown', async t => {
+  assert.deepEqual(withCheckShare([{ file: 'a.ts', milliseconds: 250 }], 2), [{ file: 'a.ts', milliseconds: 250, checkTimeShareUpperBoundPercent: 12.5 }]);
+  assert.equal(withCheckShare([{ milliseconds: 5 }], undefined)[0].checkTimeShareUpperBoundPercent, null);
+  const report = await analyze({ project: path.join(root, 'examples/type-comparison') });
+  assert.ok(report.diagnostics['Check time'].value > 0);
+  assert.equal(typeof report.hotspots[0].checkTimeShareUpperBoundPercent, 'number');
+  assert.equal(typeof report.projectHotspots[0].checkTimeShareUpperBoundPercent, 'number');
+  assert.match(renderReport(report), /\(at most [\d.]+% of Check\)/);
+  const chain = { file: 'a.ts', line: 1, character: 1, milliseconds: 40, memberCount: 1, comparisons: [], checkTimeShareUpperBoundPercent: 20 };
+  const text = renderReport(emptyReport([{ rule: 'source-check-chain', confidence: 'measured', title: 'chain', evidence: chain, suggestion: 's' }]));
+  assert.match(text, /at most 20% of Check time \(upper bound, not a predicted saving; inclusive interval measured under tracing\)/);
+});
+
 test('traced counters are flagged as inflated by tracing', async t => {
   const report = await analyze({ project: simple(t) });
   assert.ok(report.warnings.some(w => /Types, Instantiations and Memory counters.*traced run.*inflates/.test(w)));
 });
 
+test('test and spec roots are counted, not listed, in review-root-files', t => {
+  const dir = fixture(t, { compilerOptions: options, include: ['**/*'] }, {
+    'main.ts': 'export const m = 1;', 'generated/x.ts': 'export const x = 1;', 'a.test.ts': 'export {};', 'b.spec.tsx': 'export {};',
+    'tests/c.ts': 'export {};', 'src/__tests__/d.ts': 'export {};'
+  });
+  const project = readProject(dir, ts);
+  const finding = inspectProject(buildGraph(ts, project), project).find(f => f.rule === 'review-root-files');
+  assert.deepEqual(finding.evidence.files, ['generated/x.ts']);
+  assert.equal(finding.evidence.testRootsExcluded, 4);
+  assert.equal(finding.evidence.count, 1);
+  assert.match(renderReport(emptyReport([finding])), /not listed: 4 test\/spec roots/);
+  const onlyTests = fixture(t, { compilerOptions: options, include: ['**/*'] }, { 'main.ts': 'export const m = 1;', 'a.test.ts': 'export {};', 'tests/c.ts': 'export {};' });
+  const p2 = readProject(onlyTests, ts);
+  assert.equal(inspectProject(buildGraph(ts, p2), p2).some(f => f.rule === 'review-root-files'), false);
+});
