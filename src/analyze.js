@@ -13,6 +13,8 @@ export const toolVersion = require('../package.json').version;
 const slash = p => p.split(path.sep).join('/');
 const clean = s => String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
 const display = (base, p) => clean(slash(path.relative(base, p)) || '.');
+const errorSummary = error => clean(String(error?.message ?? error).split('\n')[0].trim().slice(0, 200)) || 'unknown error';
+
 
 export function loadCompiler(base) {
   let compilerPath;
@@ -55,7 +57,9 @@ function collectSpecifiers(ts, source) {
   let reexports = 0;
   const add = node => {
     if (node && ts.isStringLiteralLike(node)) {
-      const mode = ts.getModeForUsageLocation(source, node);
+      let mode;
+      try { mode = ts.getModeForUsageLocation(source, node); }
+      catch { mode = undefined; /* Unknown usage mode: resolve with the compiler default. */ }
       specs.set(`${node.text}:${mode}`, { spec: node.text, mode });
     }
   };
@@ -78,9 +82,10 @@ function collectSpecifiers(ts, source) {
 
 export function buildGraph(ts, project) {
   const { parsed, base } = project;
-  const program = ts.createProgram({ rootNames: parsed.fileNames, options: {
-    ...parsed.options, noEmit: true, generateTrace: undefined, generateCpuProfile: undefined
-  }, projectReferences: parsed.projectReferences });
+  const options = { ...parsed.options, noEmit: true, generateTrace: undefined, generateCpuProfile: undefined };
+  // Parent pointers are required by getModeForUsageLocation for require()/import() arguments.
+  const host = ts.createCompilerHost(options, true);
+  const program = ts.createProgram({ rootNames: parsed.fileNames, options, host, projectReferences: parsed.projectReferences });
   const sources = program.getSourceFiles();
   const files = new Map(sources.map(s => [path.resolve(s.fileName), s]));
   const edges = new Map();
@@ -88,7 +93,11 @@ export function buildGraph(ts, project) {
   const barrels = [];
   const cache = ts.createModuleResolutionCache(base, x => x, parsed.options);
   for (const [file, source] of files) {
-    const { specs, reexports } = collectSpecifiers(ts, source);
+    let collected;
+    // One unreadable file must not discard the analysis of the rest of the program.
+    try { collected = collectSpecifiers(ts, source); }
+    catch (error) { skipped.push({ file: display(base, file), reason: errorSummary(error) }); collected = { specs: new Map(), reexports: 0 }; }
+    const { specs, reexports } = collected;
     const deps = new Set();
     for (const { spec, mode } of specs.values()) {
       // Resolve each import using its actual ESM/CJS usage mode, including dynamic import.
@@ -108,11 +117,12 @@ export function buildGraph(ts, project) {
       if (!incoming.has(dep)) incoming.set(dep, new Set());
       incoming.get(dep).add(file);
     }
+  const skipped = [];
     if (reexports >= 3 && !file.includes(`${path.sep}node_modules${path.sep}`)) {
       barrels.push({ file, reexports });
     }
   }
-  return { ts, program, files, edges, incoming, barrels, roots: new Set(parsed.fileNames.map(f => path.resolve(f))) };
+  return { ts, program, files, edges, incoming, barrels, skipped, roots: new Set(parsed.fileNames.map(f => path.resolve(f))) };
 }
 
 export function reachable(edges, start) {
@@ -239,8 +249,6 @@ export function inspectProject(graph, project) {
         : 'Try importing the needed module directly, then compare fresh checks. Other roots and importers may still load these files; reach does not measure exclusive cost or runtime bundle size.' });
   return findings;
 }
-
-const errorSummary = error => clean(String(error?.message ?? error).split('\n')[0].trim().slice(0, 200)) || 'unknown error';
 
 // A file whose recorded check time is mostly covered by one chain is already explained by that chain.
 export const CHAIN_COVERAGE_THRESHOLD = 0.8;
