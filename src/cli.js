@@ -71,6 +71,6 @@ try {
     if (!options.file && result.summary.compilerExitCode !== 0) process.exitCode = 2;
   }
 } catch (error) {
-  process.stderr.write(`whyts: ${error.message.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')}\n`);
+  process.stderr.write(`whyts: ${error.message.replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g, ' ')}\n`);
   process.exitCode = 1;
 }

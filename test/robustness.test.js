@@ -242,3 +242,11 @@ test('error file paths stay relative when the project directory is reached throu
   assert.equal(report.compilerErrors.first[0].file, 'main.ts');
   assert.equal(parseCompilerErrors('main.ts(1,1): error TS2322: bad', 5, link).first[0].file, 'main.ts');
 });
+
+test('CLI prints the compiler crash message with its stderr lines on separate lines', { skip: process.platform === 'win32' }, t => {
+  const tsc = fakeCompiler(t, 'console.error("first detail");\nconsole.error("FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory");\nprocess.kill(process.pid, "SIGABRT");');
+  const run = spawnSync(process.execPath, [cli, '-p', simple(t), '--typescript', tsc], { encoding: 'utf8' });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /^whyts: Compiler terminated by SIGABRT\./);
+  assert.match(run.stderr, /\n  first detail\n  FATAL ERROR: Reached heap limit/);
+});
