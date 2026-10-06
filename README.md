@@ -19,7 +19,7 @@ Requires Node.js 20+ and a TypeScript project with dependencies installed.
 npx whyts --project .
 ```
 
-For repeatable runs, pin a version: `npx whyts@0.4.0 --project .`
+For repeatable runs, pin a version: `npx whyts@0.5.0 --project .`
 
 To run from a checkout:
 
@@ -92,13 +92,15 @@ JSON has `schemaVersion`, compiler version, summary, diagnostics with units, fin
 
 Findings alone do not fail CI. This release diagnoses; it does not enforce a performance budget.
 
+For a native TypeScript 7 run, the JSON has four more fields: `compiler` (`native`), `experimental` (`true`), `graphTypescriptVersion` and `checkers` (`1`). `typescriptVersion` is the version of the native compiler.
+
 ## Options for large projects
 
 | Option | Meaning |
 | --- | --- |
 | `--timeout <seconds>` | Compiler time limit. The default is 900. |
-| `--max-old-space-size <MB>` | Set the heap limit of the compiler process. The range is 256 to 1048576. |
-| `--typescript <path>` | Use this TypeScript package directory, or its `lib/typescript.js`, instead of the project compiler. The version must be 5.x or 6.x. |
+| `--max-old-space-size <MB>` | Set the heap limit of the compiler process. The range is 256 to 1048576. TypeScript 7 ignores it. |
+| `--typescript <path>` | Use this TypeScript package directory, or its `lib/typescript.js`, instead of the project compiler. The version may be 5.x, 6.x or 7.x. |
 
 ```sh
 node src/cli.js --project packages/compiler --max-old-space-size 10240
@@ -130,9 +132,37 @@ JSON version 0.4 adds these fields. Schema version 1 and all existing fields sta
 
 `summary.errorCount` now counts the parsed compiler error lines.
 
+## TypeScript 7 (experimental)
+
+whyts can profile a project with the native TypeScript 7 compiler. This support is experimental.
+
+To use it, install `typescript@7` in the project, or pass the package directory with `--typescript`. Then run whyts as usual.
+
+```sh
+npx whyts --project . --typescript node_modules/typescript
+```
+
+How it works:
+
+- whyts starts `bin/tsc` of the TypeScript 7 package with `--checkers 1`.
+- The native compiler numbers the types of each checker separately. With more than one checker, the type IDs in the trace collide. One checker keeps each ID unique.
+- The native trace stores source positions as UTF-8 byte offsets. whyts converts them to UTF-16 offsets.
+- The native `types_0.json` file stores declaration paths in lower case. whyts matches them to the real file names.
+- TypeScript 7 has no JavaScript API for module resolution. whyts builds the import graph and reads the tsconfig with its own `typescript` 5.x or 6.x package.
+
+Known limits:
+
+- The report and the JSON mark the run as experimental. `compiler` is `native`, `experimental` is `true`, and `checkers` is `1`.
+- Check time comes from one checker. A default `tsc` run uses more checkers, so its Check time can differ. Do not compare the two.
+- `--max-old-space-size` has no effect, because the native compiler is not a Node.js process. whyts prints a warning and ignores the option.
+- The native compiler prints no `Dump types time` line. The report does not show it, and `summary.dumpTypesSeconds` is `null`.
+- whyts warns when the graph and the native compiler report different file counts. Module resolution can differ between the two compilers. Treat the import graph findings as uncertain then.
+- whyts stops with an error when its own TypeScript cannot read your tsconfig. A setting that only TypeScript 7 knows can cause this.
+- We tested TypeScript 7.0.2 on Linux x64 only. We did not test Windows, macOS or other 7.x versions.
+
 ## How it works
 
-1. Resolve the project's installed TypeScript compiler, falling back to the bundled 5.9 compiler.
+1. Resolve the project's installed TypeScript compiler, falling back to the bundled 5.9 compiler. A TypeScript 7 package selects the native compiler.
 2. Read the effective config using the compiler API, including JSONC and `extends`.
 3. Build a source/import graph and inspect the loaded type packages.
 4. Run that compiler with `--noEmit`, `--extendedDiagnostics`, and `--generateTrace`.
@@ -152,8 +182,7 @@ The compiler receives a new temporary incremental cache. Your existing build cac
 - To bound graph traversal, at most 40 barrel candidates are checked, ranked first by reexport count; five are reported. Trace files over 128 MiB are not parsed. Type descriptors are streamed in 64 KiB chunks with a 1 GiB scan budget, 4 MiB per-record budget and 16 MiB retained-data budget. Scanning stops when the selected IDs are found, so the remaining file is not validated. Limits or missing IDs produce warnings; file size alone does not disable type resolution. Compiler output is bounded at 16 MiB. Source snippets are limited to 240 characters and type labels to 160 characters.
 - Select a **leaf tsconfig** in a monorepo. whyts does not run `tsc --build` or build referenced projects. Missing/stale referenced declaration outputs can affect results.
 - `Types`, `Instantiations` and `Memory used` in `diagnostics` come from the trace run. The trace makes them larger. In the TypeSpec compiler project, the traced run reported 10,480,436 types. An earlier test run without a trace reported 135,624 types. We did not repeat the run without a trace for 0.4. Do not compare them with output of a normal `tsc --extendedDiagnostics` run.
-- TypeScript 7 is not supported. We examined the `typescript@7.0.2` package on 2026-10-06. It has no `lib/typescript.js` and no `createProgram`. The `require('typescript')` call returns `lib/version.cjs`, which exports only the version. The `bin/tsc` file starts a native executable for your platform. The programmatic API is in `typescript/unstable/*` and is marked unstable. whyts uses the JavaScript compiler API for the import graph and for trace positions, so it cannot use that package. We did not check if the native compiler writes `--generateTrace` output in the same format. If a project pins TypeScript 7, use `--typescript` with a 5.x or 6.x package. The results then describe that compiler.
-- Supports the JavaScript TypeScript compiler in **5.x and 6.x**. Native TypeScript 7 and `tsgo` are outside this release's scope. Plugins used by an IDE or a separate build framework are not profiled.
+- whyts supports the JavaScript TypeScript compiler in **5.x and 6.x**. It supports the native TypeScript 7 compiler as an experiment (see the TypeScript 7 section). Plugins that an IDE or a separate build framework uses are not profiled.
 - Static graph heuristics cannot establish that a type or file causes a particular slowdown. No automatic edits or fixes are performed.
 
 For further trace exploration, use Microsoft's [analyze-trace](https://github.com/microsoft/typescript-analyze-trace). Compiler documentation: [extendedDiagnostics](https://www.typescriptlang.org/tsconfig/extendedDiagnostics.html), [generateTrace](https://www.typescriptlang.org/tsconfig/generateTrace.html), and [performance guidance](https://github.com/microsoft/TypeScript/wiki/Performance).
