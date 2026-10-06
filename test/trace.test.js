@@ -273,3 +273,29 @@ test('declaration positions do not rely on the deprecated scanner.getTokenPos', 
   const result = traceDetails([event('structuredTypeRelatedTo', 0, 20000, { sourceId: 1, targetId: 2 })], [descriptor], base, graph);
   assert.deepEqual(result.typeHotspots[0].source.declaration, { file: 'main.ts', line: 2, character: 3, scope: 'project' });
 });
+
+test('native traces: UTF-8 byte offsets become UTF-16, Go kind numbers and lowercased declaration paths are honored', t => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-native-'));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(base, 'Src'));
+  const text = '// Türkçe 日本語 😀\nexport const value: number = 1;\n';
+  fs.writeFileSync(path.join(base, 'Src', 'Main.ts'), text);
+  fs.writeFileSync(path.join(base, 'tsconfig.json'), JSON.stringify({ compilerOptions: { noLib: true }, files: ['Src/Main.ts'] }));
+  const graph = Object.assign(Object.create(buildGraph(ts, readProject(base, ts))), { native: { identifierKind: 79 } });
+  const file = path.join(base, 'Src', 'Main.ts');
+  const utf16 = text.indexOf('const') - 1, end = text.length - 1;
+  const bytes = Buffer.byteLength(text.slice(0, utf16)), bytesEnd = Buffer.byteLength(text.slice(0, end));
+  assert.notEqual(bytes, utf16, 'the fixture needs multibyte characters before the span');
+  const events = [{ ph: 'X', pid: 1, tid: 2, name: 'checkVariableDeclaration', ts: 0, dur: 20000,
+    args: { checkerId: 0, path: file, pos: bytes, end: bytesEnd, kind: 261 } }];
+  const lowercased = { id: 1, symbolName: 'T', flags: ['Object'], firstDeclaration: { path: file.toLowerCase(), start: { line: 2, character: 14 } } };
+  const details = traceDetails(events, [], base, graph);
+  assert.equal(details.sourceHotspots[0].line, 2);
+  assert.equal(details.sourceHotspots[0].snippet, 'const value: number = 1;');
+  const resolved = resolveTraceTypes({ ...details, typeHotspots: [{ milliseconds: 1, source: { id: 1 }, target: { id: 1 } }], sourceHotspots: [], sourceGroups: [] }, [lowercased], base, graph);
+  assert.equal(resolved.typeHotspots[0].source.declaration.file, 'Src/Main.ts');
+  assert.equal(resolved.typeHotspots[0].source.declaration.scope, 'project');
+  // An offset inside a multibyte character is not a character boundary and is dropped rather than misplaced.
+  const inside = traceDetails([{ ...events[0], args: { ...events[0].args, pos: 5 } }], [], base, graph);
+  assert.equal(inside.sourceHotspots.length, 0);
+});

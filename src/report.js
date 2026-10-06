@@ -19,7 +19,10 @@ const shareNote = h => h.checkTimeShareUpperBoundPercent != null ? `  (at most $
 
 export function renderReport(report, color = false) {
   const bold = s => color ? `\u001b[1m${s}\u001b[0m` : s;
-  const lines = [bold('whyts'), `TypeScript ${report.typescriptVersion} · ${safe(report.project)}`, ''];
+  const native = report.compiler === 'native';
+  const lines = [bold('whyts'), `TypeScript ${report.typescriptVersion}${native ? ' (native, EXPERIMENTAL)' : ''} · ${safe(report.project)}`];
+  if (native) lines.push(`Experimental TypeScript 7 support. ${report.checkers} checker; Check time is not comparable with a default parallel tsc run.`);
+  lines.push('');
   const total = report.diagnostics['Total time'];
   const check = report.diagnostics['Check time'];
   lines.push(`Compiler: ${total ? total.value.toFixed(2) + 's' : 'n/a'} · Check: ${check ? check.value.toFixed(2) + 's' : 'n/a'} · Program files: ${report.summary.programFiles}`);

@@ -180,7 +180,7 @@ test('--max-old-space-size and --typescript are validated by the CLI', t => {
   assert.equal(JSON.parse(ok.stdout).typescriptVersion, ts.version);
 });
 
-test('--typescript selects the compiler and keeps the 5.x/6.x check', t => {
+test('--typescript selects the compiler; 7.x selects the native compiler plus the bundled JavaScript API', t => {
   const packageDir = path.dirname(path.dirname(realCompiler));
   for (const value of [packageDir, realCompiler, path.dirname(realCompiler)]) {
     const compiler = loadCompiler(os.tmpdir(), value);
@@ -193,7 +193,16 @@ test('--typescript selects the compiler and keeps the 5.x/6.x check', t => {
   const native = fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-ts7-'));
   t.after(() => fs.rmSync(native, { recursive: true, force: true }));
   fs.writeFileSync(path.join(native, 'package.json'), '{"name":"typescript","version":"7.0.2"}');
-  assert.throws(() => loadCompiler(os.tmpdir(), native), /TypeScript 7\.0\.2 is unsupported.*native compiler.*5\.x or 6\.x/);
+  assert.throws(() => loadCompiler(os.tmpdir(), native), /TypeScript 7\.0\.2 package has no bin\/tsc/);
+  fs.mkdirSync(path.join(native, 'bin'));
+  fs.writeFileSync(path.join(native, 'bin/tsc'), '');
+  fs.mkdirSync(path.join(native, 'dist/enums'), { recursive: true });
+  fs.writeFileSync(path.join(native, 'dist/enums/syntaxKind.enum.js'), 'SyntaxKind[SyntaxKind["Identifier"] = 79] = "Identifier";');
+  const compiled = loadCompiler(os.tmpdir(), native);
+  assert.equal(compiled.native.version, '7.0.2');
+  assert.equal(compiled.native.identifierKind, 79);
+  assert.equal(compiled.tscPath, path.join(native, 'bin/tsc'));
+  assert.equal(compiled.ts.version, ts.version, 'the import graph uses whyts own JavaScript API');
   const broken = fakeCompiler(t, '');
   fs.writeFileSync(path.join(broken, 'lib/typescript.js'), 'throw new Error("cannot start");');
   assert.throws(() => loadCompiler(os.tmpdir(), broken), /Could not load the TypeScript compiler.*cannot start/);

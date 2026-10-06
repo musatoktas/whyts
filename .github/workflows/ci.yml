@@ -33,3 +33,16 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm install --no-save --ignore-scripts typescript@6.0.3
       - run: npm test
+  typescript-7:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm install --prefix "$RUNNER_TEMP/ts7" --ignore-scripts typescript@7.0.2
+      - run: npm test
+        env:
+          WHYTS_TS7: ${{ runner.temp }}/ts7/node_modules/typescript
