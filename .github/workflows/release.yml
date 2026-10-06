@@ -1,0 +1,37 @@
+name: Release
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing (OIDC)
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Verify tag matches package.json version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "v$version" ]; then
+            echo "Release tag '$TAG' does not match package.json version '$version' (expected 'v$version')." >&2
+            exit 1
+          fi
+      - name: Use npm 11.5.1 or newer
+        run: |
+          npm_version=$(npm --version)
+          if ! node -e "const [a,b,c]=process.argv[1].split('.').map(Number);process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)" "$npm_version"; then
+            npm install -g npm@latest
+          fi
+          npm --version
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - run: npm publish --access public
