@@ -239,6 +239,39 @@ export function inspectProject(graph, project) {
   return findings;
 }
 
+const errorSummary = error => clean(String(error?.message ?? error).split('\n')[0].trim().slice(0, 200)) || 'unknown error';
+
+export async function readTrace(traceFile, temporary, project, graph) {
+  const result = { hotspots: [], sourceHotspots: [], sourceGroups: [], typeHotspots: [], projectHotspots: [], typeDescriptors: null, warnings: [] };
+  if (!fs.existsSync(traceFile)) result.warnings.push('Compiler did not emit a trace; no hotspot measurements are available.');
+  else if (fs.statSync(traceFile).size > 128 * 1024 * 1024) result.warnings.push('Trace exceeds 128 MiB; hotspot parsing skipped to bound memory usage.');
+  else {
+    try {
+      const details = traceDetails(JSON.parse(fs.readFileSync(traceFile, 'utf8')), [], project.base, graph);
+      const loaded = await readTypeDescriptors(path.join(temporary, 'types.json'), selectedTypeIds(details));
+      result.typeDescriptors = loaded.stats; result.warnings.push(...loaded.warnings);
+      Object.assign(result, resolveTraceTypes(details, loaded.descriptors, project.base, graph));
+    } catch (error) { result.warnings.push(`Trace could not be parsed (${errorSummary(error)}). Other diagnostics remain available.`); }
+  }
+  return result;
+}
+
+export function measuredFindings({ hotspots, projectHotspots, sourceGroups }) {
+  const findings = [];
+  for (const hotspot of sourceGroups.filter(h => h.milliseconds >= 10)) findings.push({
+    rule: 'source-check-chain', confidence: 'measured', title: `${hotspot.file}:${hotspot.line}:${hotspot.character}: ${hotspot.milliseconds.toFixed(1)} ms recorded check chain (${hotspot.memberCount} source checks)`,
+    evidence: hotspot, suggestion: hotspot.comparisons.length
+      ? 'Inspect the focus expression, related checks and listed type declarations. Comparisons were recorded inside this chain; inclusive samples do not prove a cause or predict savings. Validate behavior and remeasure any change.'
+      : 'Inspect the focus expression and related checks. No type comparison was recorded inside this sampled chain; the trace does not establish the expensive type. Validate behavior and remeasure any change.'
+  });
+  const filesToReview = [...projectHotspots, ...hotspots.filter(h => !projectHotspots.some(p => p.file === h.file))].slice(0, 5);
+  for (const hotspot of filesToReview.filter(h => h.milliseconds >= 100)) findings.push({
+    rule: 'check-hotspot', confidence: 'measured', title: `${hotspot.file}: ${hotspot.milliseconds.toFixed(1)} ms recorded check intervals`,
+    evidence: hotspot, suggestion: 'Inspect types and declarations in this file. Trace intervals are inclusive samples, not a complete attribution of total check time.'
+  });
+  return findings;
+}
+
 export async function analyze(options = {}) {
   const projectInput = path.resolve(options.project ?? '.');
   const compilerBase = fs.existsSync(projectInput) && fs.statSync(projectInput).isDirectory() ? projectInput : path.dirname(projectInput);
@@ -258,29 +291,10 @@ export async function analyze(options = {}) {
     const diagnostics = parseDiagnostics(run.stdout);
     if (!Object.keys(diagnostics).length) throw new Error(`Compiler produced no diagnostics. ${clean((run.stderr || run.stdout).slice(0, 2000))}`);
     const traceFile = path.join(temporary, 'trace.json');
-    let hotspots = [], sourceHotspots = [], sourceGroups = [], typeHotspots = [], projectHotspots = [], typeDescriptors = null;
-    const traceWarnings = [];
-    if (fs.existsSync(traceFile)) {
-      if (fs.statSync(traceFile).size <= 128 * 1024 * 1024) {
-        try {
-          const details = traceDetails(JSON.parse(fs.readFileSync(traceFile, 'utf8')), [], project.base, graph);
-          const loaded = await readTypeDescriptors(path.join(temporary, 'types.json'), selectedTypeIds(details));
-          typeDescriptors = loaded.stats; traceWarnings.push(...loaded.warnings);
-          ({ hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots } = resolveTraceTypes(details, loaded.descriptors, project.base, graph));
-        } catch { traceWarnings.push('Trace could not be parsed. Other diagnostics remain available.'); }
-      } else traceWarnings.push('Trace exceeds 128 MiB; hotspot parsing skipped to bound memory usage.');
-    } else traceWarnings.push('Compiler did not emit a trace; no hotspot measurements are available.');
-    for (const hotspot of sourceGroups.filter(h => h.milliseconds >= 10)) findings.push({
-      rule: 'source-check-chain', confidence: 'measured', title: `${hotspot.file}:${hotspot.line}:${hotspot.character}: ${hotspot.milliseconds.toFixed(1)} ms recorded check chain (${hotspot.memberCount} source checks)`,
-      evidence: hotspot, suggestion: hotspot.comparisons.length
-        ? 'Inspect the focus expression, related checks and listed type declarations. Comparisons were recorded inside this chain; inclusive samples do not prove a cause or predict savings. Validate behavior and remeasure any change.'
-        : 'Inspect the focus expression and related checks. No type comparison was recorded inside this sampled chain; the trace does not establish the expensive type. Validate behavior and remeasure any change.'
-    });
-    const filesToReview = [...projectHotspots, ...hotspots.filter(h => !projectHotspots.some(p => p.file === h.file))].slice(0, 5);
-    for (const hotspot of filesToReview.filter(h => h.milliseconds >= 100)) findings.push({
-      rule: 'check-hotspot', confidence: 'measured', title: `${hotspot.file}: ${hotspot.milliseconds.toFixed(1)} ms recorded check intervals`,
-      evidence: hotspot, suggestion: 'Inspect types and declarations in this file. Trace intervals are inclusive samples, not a complete attribution of total check time.'
-    });
+    const trace = await readTrace(traceFile, temporary, project, graph);
+    const { hotspots, sourceHotspots, sourceGroups, typeHotspots, projectHotspots, typeDescriptors } = trace;
+    const traceWarnings = trace.warnings;
+    findings.push(...measuredFindings({ hotspots, projectHotspots, sourceGroups }));
     const confidenceRank = { measured: 0, observed: 1, review: 2 };
     findings.sort((a, b) => confidenceRank[a.confidence] - confidenceRank[b.confidence]);
     return { schemaVersion: 1, toolVersion: '0.3.0', typescriptVersion: compiler.ts.version,

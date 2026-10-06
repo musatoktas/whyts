@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import ts from 'typescript';
-import { analyze, readProject, buildGraph, explainFile, inspectProject, parseDiagnostics, traceHotspots, reachable } from '../src/analyze.js';
+import { analyze, readProject, buildGraph, explainFile, inspectProject, parseDiagnostics, traceHotspots, reachable, readTrace } from '../src/analyze.js';
 import { renderReport } from '../src/report.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -136,4 +136,17 @@ test('CLI supports spaces in paths, explain JSON, help, and actionable failures'
 test('timeout terminates the compiler and surfaces a tool failure', async t => {
   const dir = fixture(t, { compilerOptions: options, files: ['main.ts'] }, { 'main.ts': 'export const x = 1;' });
   await assert.rejects(analyze({ project: dir, timeoutMs: 1 }), /exceeded/);
+});
+
+test('trace parse failures put the error message in the warning', async t => {
+  const dir = fixture(t, { compilerOptions: options, include: ['**/*'] }, { 'main.ts': 'export const a = 1;' });
+  const project = readProject(dir, ts);
+  const graph = buildGraph(ts, project);
+  const traceFile = path.join(dir, 'trace.json');
+  fs.writeFileSync(traceFile, '{"truncated": ');
+  const result = await readTrace(traceFile, dir, project, graph);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /^Trace could not be parsed \(.+\)\. Other diagnostics remain available\.$/);
+  assert.match(result.warnings[0], /JSON/);
+  assert.ok(!/[\n\u0000-\u001f]/.test(result.warnings[0]));
 });
