@@ -1,5 +1,10 @@
 # whyts
 
+[![npm version](https://img.shields.io/npm/v/whyts)](https://www.npmjs.com/package/whyts)
+[![CI](https://github.com/musatoktas/whyts/actions/workflows/ci.yml/badge.svg)](https://github.com/musatoktas/whyts/actions/workflows/ci.yml)
+[![Node.js](https://img.shields.io/node/v/whyts)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/npm/l/whyts)](LICENSE)
+
 **Find out why your TypeScript project is slow.**
 
 A small CLI that turns compiler diagnostics, traces, and import relationships into evidence you can act on. No account, API key, or LLM required.
