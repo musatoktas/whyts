@@ -23,8 +23,18 @@ export function renderReport(report, color = false) {
   lines.push(`Compiler: ${total ? total.value.toFixed(2) + 's' : 'n/a'} · Check: ${check ? check.value.toFixed(2) + 's' : 'n/a'} · Program files: ${report.summary.programFiles}`);
   lines.push('Fresh cache · no emit · tracing enabled');
   if (report.summary.compilerExitCode !== 0) lines.push(`Compiler exited ${report.summary.compilerExitCode} with ${report.summary.errorCount} reported errors. Fix errors before comparing timings.`);
+  const dump = report.diagnostics['Dump types time'];
+  if (report.summary.wallMilliseconds !== undefined) lines.push(`Process wall time: ${(report.summary.wallMilliseconds / 1000).toFixed(2)}s` +
+    (dump ? ` · Trace type dump: ${dump.value.toFixed(2)}s (not included in Compiler total)` : ''));
   lines.push('', bold(`${report.findings.length} findings; measured checks first`));
   if (!report.findings.length) lines.push('No finding crossed a measurement threshold or matched a structural rule. Recorded intervals remain below; this does not establish that the project is fast.');
+  const errors = report.compilerErrors;
+  if (errors?.total) {
+    lines.push(`Error codes: ${errors.codes.map(c => `${c.code} x${c.count}`).join(', ')}`);
+    lines.push(`First ${errors.first.length} errors:`);
+    for (const e of errors.first) lines.push(`   ${e.file ? `${safe(e.file)}${e.line ? `:${e.line}:${e.character}` : ''}  ` : ''}${e.code}  ${safe(e.message)}`);
+    if (errors.measurementMayBeInvalid) lines.push(`WARNING: ${errors.missingDependencyErrors} of ${errors.total} errors are unresolved modules or type declarations. Dependencies may be missing or not built; these timings may not represent a healthy build.`);
+  }
   const measured = report.findings.filter(f => f.confidence === 'measured');
   const structural = report.findings.filter(f => f.confidence !== 'measured');
   const renderFinding = (finding, i) => {

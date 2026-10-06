@@ -247,6 +247,26 @@ function runCompiler(tscPath, args, cwd, { timeoutMs, maxOldSpaceMb, onProgress,
   });
 }
 
+// tsc --pretty false prints "file(line,col): error TS1234: message"; some errors have no location.
+const moduleErrorCodes = new Set(['TS2307', 'TS2792', 'TS2688', 'TS7016', 'TS6053']);
+export function parseCompilerErrors(output, limit = 5) {
+  const first = [], counts = new Map();
+  let total = 0, missingDependencyErrors = 0;
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^(?:(.+?)\((\d+),(\d+)\): )?error (TS\d+): (.*)$/);
+    if (!match) continue;
+    total++;
+    counts.set(match[4], (counts.get(match[4]) ?? 0) + 1);
+    if (moduleErrorCodes.has(match[4])) missingDependencyErrors++;
+    if (first.length < limit) first.push({ file: match[1] ? clean(slash(match[1])) : null, line: match[2] ? Number(match[2]) : null,
+      character: match[3] ? Number(match[3]) : null, code: match[4], message: clean(match[5].trim().slice(0, 200)) });
+  }
+  const codes = [...counts].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)).slice(0, 10);
+  // Half or more of all errors being unresolved modules/types means dependencies are probably missing or unbuilt.
+  const measurementMayBeInvalid = total > 0 && missingDependencyErrors * 2 >= total;
+  return { total, first, codes, missingDependencyErrors, measurementMayBeInvalid };
+}
+
 function duplicateTypes(graph, base) {
   const packages = new Map();
   const visited = new Set();
@@ -366,11 +386,15 @@ export async function analyze(options = {}) {
     return { schemaVersion: 1, toolVersion, typescriptVersion: compiler.ts.version,
       project: display(process.cwd(), project.configPath),
       summary: { programFiles: graph.files.size, rootFiles: graph.roots.size, compilerExitCode: run.exitCode,
-        errorCount: (run.stdout.match(/\berror TS\d+:/g) ?? []).length, wallMilliseconds,
+    const compilerErrors = parseCompilerErrors(run.stdout);
+        errorCount: compilerErrors.total, wallMilliseconds, dumpTypesSeconds: diagnostics['Dump types time']?.value ?? null,
         mode: 'fresh-cache, no-emit, tracing enabled', analysisOverheadExcluded: true },
-      diagnostics, findings, hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots, typeDescriptors, warnings: [...traceWarnings,
+      diagnostics, compilerErrors, findings, hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots, typeDescriptors, warnings: [...traceWarnings,
         project.parsed.projectReferences?.length ? 'Referenced projects are not built; existing declaration outputs may be required.' : null,
-        'Tracing adds overhead. Compare timings using the same compiler, cache mode, and tracing settings.'
+        graph.skipped.length ? `Import analysis skipped ${graph.skipped.length} file${graph.skipped.length === 1 ? '' : 's'} (${graph.skipped.slice(0, 3).map(f => f.file).join(', ')}${graph.skipped.length > 3 ? ', ...' : ''}); import graph findings may be incomplete.` : null,
+        compilerErrors.measurementMayBeInvalid ? `${compilerErrors.missingDependencyErrors} of ${compilerErrors.total} compiler errors are unresolved modules or type declarations (${[...moduleErrorCodes].join(', ')}). Dependencies may be missing or not built, so these timings may not represent a healthy build.` : null,
+        'Tracing adds overhead. Compare timings using the same compiler, cache mode, and tracing settings.',
+        'Types, Instantiations and Memory counters in diagnostics come from the traced run; tracing inflates them. Do not compare them with plain tsc --extendedDiagnostics output.'
       ].filter(Boolean) };
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
