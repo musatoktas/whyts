@@ -232,3 +232,13 @@ test('test and spec roots are counted, not listed, in review-root-files', t => {
   const p2 = readProject(onlyTests, ts);
   assert.equal(inspectProject(buildGraph(ts, p2), p2).some(f => f.rule === 'review-root-files'), false);
 });
+
+test('error file paths stay relative when the project directory is reached through a symlink', { skip: process.platform === 'win32' }, async t => {
+  const real = fixture(t, { compilerOptions: { ...options, skipLibCheck: true, lib: ['ES2022'] }, files: ['main.ts'] }, { 'main.ts': 'const n: number = "x";' });
+  const link = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-link-')), 'project');
+  t.after(() => fs.rmSync(path.dirname(link), { recursive: true, force: true }));
+  fs.symlinkSync(real, link, 'dir');
+  const report = await analyze({ project: link });
+  assert.equal(report.compilerErrors.first[0].file, 'main.ts');
+  assert.equal(parseCompilerErrors('main.ts(1,1): error TS2322: bad', 5, link).first[0].file, 'main.ts');
+});

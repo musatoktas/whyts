@@ -249,7 +249,17 @@ function runCompiler(tscPath, args, cwd, { timeoutMs, maxOldSpaceMb, onProgress,
 
 // tsc --pretty false prints "file(line,col): error TS1234: message"; some errors have no location.
 const moduleErrorCodes = new Set(['TS2307', 'TS2792', 'TS2688', 'TS7016', 'TS6053']);
-export function parseCompilerErrors(output, limit = 5) {
+export function parseCompilerErrors(output, limit = 5, base = null) {
+  // tsc prints paths relative to its own cwd, which is the real path; a symlinked base (macOS /var) breaks naive relative paths.
+  let realBase = base;
+  if (base) { try { realBase = fs.realpathSync(base); } catch { /* Keep the given base. */ } }
+  const locate = file => {
+    if (!realBase) return clean(slash(file));
+    const absolute = path.resolve(realBase, file);
+    let real = absolute;
+    try { real = fs.realpathSync(absolute); } catch { /* A file that no longer exists keeps its resolved path. */ }
+    return display(realBase, real);
+  };
   const first = [], counts = new Map();
   let total = 0, missingDependencyErrors = 0;
   for (const line of output.split(/\r?\n/)) {
@@ -258,7 +268,7 @@ export function parseCompilerErrors(output, limit = 5) {
     total++;
     counts.set(match[4], (counts.get(match[4]) ?? 0) + 1);
     if (moduleErrorCodes.has(match[4])) missingDependencyErrors++;
-    if (first.length < limit) first.push({ file: match[1] ? clean(slash(match[1])) : null, line: match[2] ? Number(match[2]) : null,
+    if (first.length < limit) first.push({ file: match[1] ? locate(match[1]) : null, line: match[2] ? Number(match[2]) : null,
       character: match[3] ? Number(match[3]) : null, code: match[4], message: clean(match[5].trim().slice(0, 200)) });
   }
   const codes = [...counts].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)).slice(0, 10);
@@ -386,7 +396,7 @@ export async function analyze(options = {}) {
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_SECONDS * 1000, maxOldSpaceMb: options.maxOldSpaceMb, onProgress: options.onProgress, progressIntervalMs: options.progressIntervalMs });
     const wallMilliseconds = performance.now() - started;
     const diagnostics = parseDiagnostics(run.stdout);
-    const compilerErrors = parseCompilerErrors(run.stdout);
+    const compilerErrors = parseCompilerErrors(run.stdout, 5, project.base);
     if (!Object.keys(diagnostics).length) throw new Error(`Compiler produced no diagnostics. ${clean((run.stderr || run.stdout).slice(0, 2000))}`);
     const traceFile = path.join(temporary, 'trace.json');
     const trace = await readTrace(traceFile, temporary, project, graph);
