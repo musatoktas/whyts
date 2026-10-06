@@ -259,3 +259,17 @@ test('terminal report puts source evidence before structure and sanitizes snippe
   assert.match(text, /1 source checks in one same-thread chain; durations overlap and must not be added/);
   assert.doesNotMatch(text, /\x1b/);
 });
+
+test('declaration positions do not rely on the deprecated scanner.getTokenPos', t => {
+  const { base, graph, args, event } = fixture(t);
+  const text = '// leading comment\n  export type Actual = string;\n';
+  graph.files.set(args.path, ts.createSourceFile(args.path, text, ts.ScriptTarget.Latest));
+  graph.ts = { ...ts, createScanner: (...scannerArgs) => {
+    const scanner = ts.createScanner(...scannerArgs);
+    return new Proxy(scanner, { get: (target, name) => name === 'getTokenPos' ? undefined : target[name] });
+  } };
+  const descriptor = { id: 1, symbolName: 'Actual', firstDeclaration: { path: args.path,
+    start: { line: 1, character: 1 }, end: { line: 2, character: 30 } } };
+  const result = traceDetails([event('structuredTypeRelatedTo', 0, 20000, { sourceId: 1, targetId: 2 })], [descriptor], base, graph);
+  assert.deepEqual(result.typeHotspots[0].source.declaration, { file: 'main.ts', line: 2, character: 3, scope: 'project' });
+});

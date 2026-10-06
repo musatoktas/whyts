@@ -113,7 +113,7 @@ function describeType(id, types, base, graph) {
       if (graph.ts) {
         const scanner = graph.ts.createScanner(graph.ts.ScriptTarget.Latest, true, source.languageVariant, source.text);
         scanner.setTextPos(pos); scanner.scan();
-        if (scanner.getTokenPos() >= pos && scanner.getTokenPos() < end) pos = scanner.getTokenPos();
+        if (scanner.getTokenStart() >= pos && scanner.getTokenStart() < end) pos = scanner.getTokenStart();
       } else while (pos < end && /\s/.test(source.text[pos] ?? '')) pos++;
       const location = source.getLineAndCharacterOfPosition(Math.min(pos, source.text.length));
       line = location.line + 1; character = location.character + 1;
