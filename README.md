@@ -19,7 +19,7 @@ Requires Node.js 20+ and a TypeScript project with dependencies installed.
 npx whyts --project .
 ```
 
-For repeatable runs, pin a version: `npx whyts@0.3.1 --project .`
+For repeatable runs, pin a version: `npx whyts@0.4.0 --project .`
 
 To run from a checkout:
 
@@ -37,10 +37,11 @@ node src/cli.js --project /path/to/your/tsconfig.json
 | --- | --- | --- |
 | Source check chains | Related expression/variable locations grouped by same-thread temporal nesting, inclusive chain duration, contained type comparisons with names and declaration locations | That nesting or a contained comparison proves the cause of a slowdown |
 | Broad inclusion | Effective `include` and configured root count | That every broadly included file is unnecessary |
-| Roots worth reviewing | Generated/output/test roots with no observed importers | That unimported files are safe to delete |
+| Roots worth reviewing | Generated and output roots with no observed importers. Test and spec roots are only counted | That unimported files are safe to delete |
 | Duplicate type versions | Multiple versions of an `@types` package loaded into the program | That all duplicate versions can safely be aligned |
 | Barrel reach | Reexport count, importers, transitive file reach, reached files already configured as roots | Exclusive check cost, bundler behavior, or guaranteed savings |
 | Slow file checks | Recorded `checkSourceFile` trace intervals | Complete attribution of total time or the exact expensive type |
+| Compiler errors | The first five errors, the error code counts, and a warning when unresolved modules dominate | That the timings are valid when dependencies are missing |
 
 Findings are labeled **measured**, **observed**, or **review**. Measured source check chains appear first, with project code prioritized over dependencies. Chain spans below 10 ms and file spans below 100 ms remain in the recorded data without becoming findings. Structural suggestions follow in a separate section. Suggested changes require a fresh measurement and behavior checks. whyts never invents a predicted speedup.
 
@@ -57,6 +58,12 @@ Nested checks in the same file and trace thread are shown as one chain, leaving 
 Type IDs are resolved selectively from the compiler's `types.json`, including files larger than 128 MiB. whyts streams individual descriptors and retains only IDs needed by the selected report entries. Named types, compiler flags, union/intersection member counts when available, and declaration locations give a concrete place to investigate. The project's compiler scanner skips leading whitespace and comments to show the declaration's first token. Unresolved IDs remain explicit. Comparisons without a containing recorded expression are listed separately without source attribution. Definition locations may point into a dependency, and are context rather than a proposed fix.
 
 Project file intervals have their own list, so large dependency checks cannot hide every project file. If all files reached by a barrel are already configured roots, whyts explains why changing that import alone will not remove them from the program.
+
+## Share of Check time
+
+Each measured chain and file interval shows an upper bound. The terminal report says "at most N% of Check time". JSON has `checkTimeShareUpperBoundPercent`.
+
+The value is the inclusive interval divided by the compiler `Check time`. It is not a prediction. The compiler recorded the interval during a trace run, and the trace run is slower than a normal run. A change to the code does not remove the whole share.
 
 ## Explain a file
 
@@ -85,6 +92,44 @@ JSON has `schemaVersion`, compiler version, summary, diagnostics with units, fin
 
 Findings alone do not fail CI. This release diagnoses; it does not enforce a performance budget.
 
+## Options for large projects
+
+| Option | Meaning |
+| --- | --- |
+| `--timeout <seconds>` | Compiler time limit. The default is 900. |
+| `--max-old-space-size <MB>` | Set the heap limit of the compiler process. The range is 256 to 1048576. |
+| `--typescript <path>` | Use this TypeScript package directory, or its `lib/typescript.js`, instead of the project compiler. The version must be 5.x or 6.x. |
+
+```sh
+node src/cli.js --project packages/compiler --max-old-space-size 10240
+node src/cli.js --project . --typescript node_modules/typescript
+```
+
+The trace writes a type dump after the check. The compiler does not include the dump in `Total time`. In the drizzle-orm type-tests project, `Total time` was 13.58 s and `Dump types time` was 249.3 s. The compiler process took 263.5 s. The report shows the wall time and the dump time separately.
+
+The default timeout is 900 s. That is more than 3 times the longest compiler process in the 0.4 tests (263.5 s). A progress note goes to stderr every 30 s while the compiler runs.
+
+If a signal stops the compiler, the error shows the last lines of compiler stderr. For a heap error, SIGABRT, SIGSEGV or SIGKILL, the error tells you to use `--max-old-space-size`. The operating system out-of-memory killer or a native crash can also cause SIGKILL or SIGABRT.
+
+The TypeSpec compiler project stopped in the default heap. It finished with `--max-old-space-size 10240`.
+
+## Compiler errors
+
+The report shows the first five errors with file, line and code. It also shows the count of each error code.
+
+Half or more of the errors can be unresolved modules or declarations (TS2307, TS2792, TS2688, TS7016, TS6053). Then the dependencies are probably missing or not built. The timings can be wrong. The report shows a warning.
+
+Example: react-router in the TanStack Router repository gave 1887 errors and a Check time of 4.76 s before the build. After the build it gave 0 errors and 12.43 s.
+
+JSON version 0.4 adds these fields. Schema version 1 and all existing fields stay the same.
+
+- `compilerErrors`: `total`, `first`, `codes`, `missingDependencyErrors`, `measurementMayBeInvalid`.
+- `summary.dumpTypesSeconds`.
+- `checkTimeShareUpperBoundPercent` on file intervals, source checks and chains.
+- `evidence.testRootsExcluded` on `review-root-files`.
+
+`summary.errorCount` now counts the parsed compiler error lines.
+
 ## How it works
 
 1. Resolve the project's installed TypeScript compiler, falling back to the bundled 5.9 compiler.
@@ -106,6 +151,8 @@ The compiler receives a new temporary incremental cache. Your existing build cac
 - Barrel reach counts observed source edges, including type-only edges. Files may already be configured roots, and a direct import may leave the program size unchanged.
 - To bound graph traversal, at most 40 barrel candidates are checked, ranked first by reexport count; five are reported. Trace files over 128 MiB are not parsed. Type descriptors are streamed in 64 KiB chunks with a 1 GiB scan budget, 4 MiB per-record budget and 16 MiB retained-data budget. Scanning stops when the selected IDs are found, so the remaining file is not validated. Limits or missing IDs produce warnings; file size alone does not disable type resolution. Compiler output is bounded at 16 MiB. Source snippets are limited to 240 characters and type labels to 160 characters.
 - Select a **leaf tsconfig** in a monorepo. whyts does not run `tsc --build` or build referenced projects. Missing/stale referenced declaration outputs can affect results.
+- `Types`, `Instantiations` and `Memory used` in `diagnostics` come from the trace run. The trace makes them larger. In the TypeSpec compiler project, the traced run reported 10,480,436 types. An earlier test run without a trace reported 135,624 types. We did not repeat the run without a trace for 0.4. Do not compare them with output of a normal `tsc --extendedDiagnostics` run.
+- TypeScript 7 is not supported. We examined the `typescript@7.0.2` package on 2026-10-06. It has no `lib/typescript.js` and no `createProgram`. The `require('typescript')` call returns `lib/version.cjs`, which exports only the version. The `bin/tsc` file starts a native executable for your platform. The programmatic API is in `typescript/unstable/*` and is marked unstable. whyts uses the JavaScript compiler API for the import graph and for trace positions, so it cannot use that package. We did not check if the native compiler writes `--generateTrace` output in the same format. If a project pins TypeScript 7, use `--typescript` with a 5.x or 6.x package. The results then describe that compiler.
 - Supports the JavaScript TypeScript compiler in **5.x and 6.x**. Native TypeScript 7 and `tsgo` are outside this release's scope. Plugins used by an IDE or a separate build framework are not profiled.
 - Static graph heuristics cannot establish that a type or file causes a particular slowdown. No automatic edits or fixes are performed.
 

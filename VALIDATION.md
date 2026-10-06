@@ -1,3 +1,52 @@
+# v0.4.0 validation
+
+Done on 2026-10-06 with Node.js 24.21.0 on Linux.
+
+## Tests
+
+- The syntax check passed for all five source modules.
+- All 45 tests passed with TypeScript 5.9.3. All 45 passed again after `npm install --no-save typescript@6.0.3`. Version 0.3.1 had 29 tests. This release adds 16.
+- We ran the tests with `TMPDIR` set to a clean directory. Another process had put TypeScript 7.0.2 in `/tmp/node_modules`, and test projects in `/tmp` resolved it. This is a bench problem and not a defect in whyts.
+- We reverted each fix in turn and ran the new tests. Each revert made at least one test fail. We then restored the fix.
+  - Create the program without the compiler host: the `require()` test failed. It failed only with TypeScript 6.0.3. TypeScript 5.9.3 does not throw in this case.
+  - Remove the guard on the usage mode, and remove the guard on the file traversal: the isolation test failed.
+  - Print the old crash message, and do not pass the heap option to the process: the abort test failed.
+  - Turn off the dependency warning: the error summary tests failed.
+  - Remove the check-time share: the share test failed.
+  - List the test roots again: the test-root test failed.
+  - Set the default timeout back to 120 s: the default timeout test failed.
+  - Turn off the progress note, and remove `dumpTypesSeconds`: the progress and dump tests failed.
+  - Allow TypeScript 7: the `--typescript` test failed.
+  - Remove the traced-counter warning: the counter test failed.
+  - Print error paths without `realpath`: the symlink test failed. GitHub Actions on macOS found this defect first.
+  - Replace every control character in the CLI error with a space: the CLI crash message test failed.
+- `npm pack --dry-run` lists `whyts-0.4.0.tgz` with 9 files.
+
+## Test projects
+
+We ran the changed CLI on clones of public projects on the bench. Tools: `/usr/bin/time -v`, `nice -n 5`. The MBD gate lock was free before each step started. The output files are in `/opt/whyts-korpus/out/v04-*` on the bench. We deleted the installed dependencies after the runs.
+
+| Project | v0.3.1 | v0.4.0 |
+| --- | --- | --- |
+| playwright, root `tsconfig.json` (TypeScript 6.0.3) | Crash after 2.77 s: `Cannot read properties of undefined (reading 'kind')` | Finished. Compiler exit 2 with 13 errors, all TS2307 for generated files that were not built. Check 8.89 s, wall 19.6 s. The dependency warning showed. |
+| playwright, `tests/tsconfig.json` | The same crash | Finished. 97 errors: 82 TS2307, 14 TS2305, 1 TS2345. Check 5.76 s, wall 12.1 s. |
+| typespec compiler, `tsconfig.build.json`, default heap | `Compiler terminated by SIGABRT.` after 113.9 s | `Compiler terminated by SIGABRT.`, the heap diagnosis, the `--max-old-space-size` hint, and the last stderr lines. 115.9 s. |
+| typespec compiler, `--max-old-space-size 10240` | Not available | Finished. Exit 2 with 1 error (TS2307). Total 6.09 s, Check 4.69 s, Dump types 114.03 s, wall 121.1 s. Peak memory 7.07 GB. |
+| drizzle-orm `src` | Wall 193.9 s, Dump types 184.63 s (run with `--timeout 900`) | Default timeout. Finished. Exit 2 with 6 errors. Total 8.4 s, Check 6.74 s, Dump types 183.28 s, wall 192.3 s. |
+| drizzle-orm `type-tests` | Wall 262.6 s, Total 14.38 s, Dump types 247.48 s (run with `--timeout 900`) | Default timeout. Finished. Exit 2 with 6 errors. Total 13.58 s, Check 11.87 s, Dump types 249.3 s, wall 263.5 s. Process 270.05 s. 8 progress notes. |
+
+- The old default timeout of 120 s would have stopped both drizzle-orm runs. They needed more than 190 s.
+- The report shows wall time and dump time separately. The largest `source-check-chain` finding shows an upper bound of 4.4% (playwright root), 2.9% (typespec), 7.3% (drizzle `src`) and 4.2% (drizzle `type-tests`) of Check time.
+- The 6 drizzle-orm errors (TS2305 and TS7006) did not trigger the dependency warning. The warning did show for playwright and typespec, where TS2307 errors were all or most of the errors.
+- The typespec default-heap run used the CLI before commit `eb8b422`. That commit keeps line breaks in the crash message. The CLI test covers it. We did not repeat the typespec run.
+
+## Not verified
+
+- We did not run the test-root change on the MBD project. Unit tests cover it. The drizzle-orm `src` run had no test roots without importers.
+- We did not run v0.4.0 on trpc. We examined the `typescript@7.0.2` package instead (see the README).
+- The typespec traced run reported 10,480,436 types. The value 135,624 for a run without a trace comes from an earlier test run. Our new run without a trace failed with TS6379 (the project is composite). We did not repeat it.
+- The react-router numbers in the README (1887 errors and 4.76 s before the build, 0 errors and 12.43 s after) come from v0.3.1 runs. We did not repeat them with v0.4.0.
+
 # v0.3.1 validation
 
 Performed on 2026-10-06 with Node.js 24.21.0 on Linux.
