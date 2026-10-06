@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import ts from 'typescript';
-import { analyze, readProject, buildGraph, explainFile, inspectProject, parseDiagnostics, traceHotspots, reachable, readTrace, measuredFindings, CHAIN_COVERAGE_THRESHOLD } from '../src/analyze.js';
+import { analyze, readProject, buildGraph, explainFile, inspectProject, parseDiagnostics, traceHotspots, reachable, readTrace, toolVersion, measuredFindings, CHAIN_COVERAGE_THRESHOLD } from '../src/analyze.js';
 import { renderReport } from '../src/report.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -123,7 +123,9 @@ test('CLI supports spaces in paths, explain JSON, help, and actionable failures'
   const dir = fixture(t, { compilerOptions: options, files: ['has spaces.ts'] }, { 'has spaces.ts': 'export const x = 1;' });
   const run = args => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
   assert.equal(run(['--help']).status, 0);
-  assert.equal(run(['--version']).stdout.trim(), '0.3.0');
+  const packageVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  assert.equal(run(['--version']).stdout.trim(), packageVersion);
+  assert.equal(toolVersion, packageVersion);
   const result = run(['explain', 'has spaces.ts', '-p', dir, '--json']);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).configuredRoot, true);

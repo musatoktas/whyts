@@ -9,6 +9,7 @@ import { readTypeDescriptors } from './types.js';
 export { traceHotspots } from './trace.js';
 
 const require = createRequire(import.meta.url);
+export const toolVersion = require('../package.json').version;
 const slash = p => p.split(path.sep).join('/');
 const clean = s => String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
 const display = (base, p) => clean(slash(path.relative(base, p)) || '.');
@@ -301,7 +302,7 @@ export async function analyze(options = {}) {
     findings.push(...measuredFindings({ hotspots, projectHotspots, sourceGroups }));
     const confidenceRank = { measured: 0, observed: 1, review: 2 };
     findings.sort((a, b) => confidenceRank[a.confidence] - confidenceRank[b.confidence]);
-    return { schemaVersion: 1, toolVersion: '0.3.0', typescriptVersion: compiler.ts.version,
+    return { schemaVersion: 1, toolVersion, typescriptVersion: compiler.ts.version,
       project: display(process.cwd(), project.configPath),
       summary: { programFiles: graph.files.size, rootFiles: graph.roots.size, compilerExitCode: run.exitCode,
         errorCount: (run.stdout.match(/\berror TS\d+:/g) ?? []).length, wallMilliseconds,
