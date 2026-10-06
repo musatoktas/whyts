@@ -14,7 +14,7 @@ Requires Node.js 20+ and a TypeScript project with dependencies installed.
 npx whyts --project .
 ```
 
-For repeatable runs, pin a version: `npx whyts@0.3.0 --project .`
+For repeatable runs, pin a version: `npx whyts@0.3.1 --project .`
 
 To run from a checkout:
 
@@ -97,6 +97,7 @@ The compiler receives a new temporary incremental cache. Your existing build cac
 - Trace generation and an empty cache affect timings. Compare runs with the same compiler, flags, hardware, and tracing mode. The report's wall timer excludes the earlier graph analysis.
 - Recorded check intervals are inclusive and expression/type events may be sampled. Overlapping intervals for the same file, source check, chain root, or type pair are merged. The five largest file checks and five largest project file checks are reported separately, plus five source chains (project first), up to five members and three contained comparisons per chain, and five global type comparisons. The five individual source checks remain in JSON for compatibility. These lists overlap and cannot be summed into total check time.
 - A comparison is associated with the innermost recorded source check only when its whole span fits inside that check on the same process/thread. The chain also collects comparisons contained in its members; they may occur outside the selected focus expression. Unrecorded checks, missing positions, or unavailable type descriptors reduce detail; whyts does not infer a missing causal chain.
+- A `check-hotspot` finding is omitted when a single source check chain in the same file covers at least 80% of that file's recorded check time, because the chain finding already reports the same time. The file stays in the "Largest recorded project file-check intervals" list. The threshold is `CHAIN_COVERAGE_THRESHOLD` (0.8) in `src/analyze.js`.
 - Barrel reach counts observed source edges, including type-only edges. Files may already be configured roots, and a direct import may leave the program size unchanged.
 - To bound graph traversal, at most 40 barrel candidates are checked, ranked first by reexport count; five are reported. Trace files over 128 MiB are not parsed. Type descriptors are streamed in 64 KiB chunks with a 1 GiB scan budget, 4 MiB per-record budget and 16 MiB retained-data budget. Scanning stops when the selected IDs are found, so the remaining file is not validated. Limits or missing IDs produce warnings; file size alone does not disable type resolution. Compiler output is bounded at 16 MiB. Source snippets are limited to 240 characters and type labels to 160 characters.
 - Select a **leaf tsconfig** in a monorepo. whyts does not run `tsc --build` or build referenced projects. Missing/stale referenced declaration outputs can affect results.

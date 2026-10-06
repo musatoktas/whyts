@@ -1,3 +1,13 @@
+# v0.3.1 validation
+
+Performed on 2026-10-06 with Node.js 24.21.0 on Linux.
+
+- Syntax checks passed for all five source modules.
+- All 29 tests passed with TypeScript 5.9.3 and, after `npm install --no-save typescript@6.0.3` in the same checkout, with TypeScript 6.0.3. v0.3.0 had 26 tests; this release adds three regression tests.
+- Each new behavior test was confirmed to fail when its fix was temporarily reverted, and the revert was undone afterwards: dropping the error message from the trace parse warning, using `getTokenPos` instead of `getTokenStart` (against a scanner that lacks it), and removing the 80% chain coverage check. Hardcoding the version in `src/cli.js` fails the CLI version assertion.
+- `npm pack` produced `whyts-0.3.1.tgz`. Installed offline-style with `--ignore-scripts` in a clean directory, `npx whyts --version` printed 0.3.1 and `--json` on `examples/barrel` reported `toolVersion` 0.3.1 with 3 findings.
+- The version now comes from `package.json` for the CLI and the JSON report. The tests compare against `package.json` instead of a literal.
+
 # v0.3.0 validation
 
 Performed on 2026-10-05 with Node.js 24.19.0 on Linux.

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import ts from 'typescript';
-import { analyze, readProject, buildGraph, explainFile, inspectProject, parseDiagnostics, traceHotspots, reachable } from '../src/analyze.js';
+import { analyze, readProject, buildGraph, explainFile, inspectProject, parseDiagnostics, traceHotspots, reachable, readTrace, toolVersion, measuredFindings, CHAIN_COVERAGE_THRESHOLD } from '../src/analyze.js';
 import { renderReport } from '../src/report.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -123,7 +123,9 @@ test('CLI supports spaces in paths, explain JSON, help, and actionable failures'
   const dir = fixture(t, { compilerOptions: options, files: ['has spaces.ts'] }, { 'has spaces.ts': 'export const x = 1;' });
   const run = args => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
   assert.equal(run(['--help']).status, 0);
-  assert.equal(run(['--version']).stdout.trim(), '0.3.0');
+  const packageVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  assert.equal(run(['--version']).stdout.trim(), packageVersion);
+  assert.equal(toolVersion, packageVersion);
   const result = run(['explain', 'has spaces.ts', '-p', dir, '--json']);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).configuredRoot, true);
@@ -136,4 +138,34 @@ test('CLI supports spaces in paths, explain JSON, help, and actionable failures'
 test('timeout terminates the compiler and surfaces a tool failure', async t => {
   const dir = fixture(t, { compilerOptions: options, files: ['main.ts'] }, { 'main.ts': 'export const x = 1;' });
   await assert.rejects(analyze({ project: dir, timeoutMs: 1 }), /exceeded/);
+});
+
+test('trace parse failures put the error message in the warning', async t => {
+  const dir = fixture(t, { compilerOptions: options, include: ['**/*'] }, { 'main.ts': 'export const a = 1;' });
+  const project = readProject(dir, ts);
+  const graph = buildGraph(ts, project);
+  const traceFile = path.join(dir, 'trace.json');
+  fs.writeFileSync(traceFile, '{"truncated": ');
+  const result = await readTrace(traceFile, dir, project, graph);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /^Trace could not be parsed \(.+\)\. Other diagnostics remain available\.$/);
+  assert.match(result.warnings[0], /JSON/);
+  assert.ok(!/[\n\u0000-\u001f]/.test(result.warnings[0]));
+});
+
+test('check-hotspot is skipped when one chain covers at least 80 percent of the file time', () => {
+  const group = (file, milliseconds) => ({ file, line: 1, character: 1, milliseconds, memberCount: 1, comparisons: [] });
+  const file = (name, milliseconds) => ({ file: name, milliseconds });
+  const rules = (files, groups) => measuredFindings({ hotspots: files, projectHotspots: files, sourceGroups: groups })
+    .map(f => `${f.rule}:${f.evidence.file}`);
+  // 80/100 is exactly at the threshold: the chain explains the file, so only the chain is reported.
+  assert.deepEqual(rules([file('a.ts', 100)], [group('a.ts', 80)]), ['source-check-chain:a.ts']);
+  assert.equal(CHAIN_COVERAGE_THRESHOLD, 0.8);
+  // Below the threshold both findings remain.
+  assert.deepEqual(rules([file('a.ts', 100)], [group('a.ts', 79)]), ['source-check-chain:a.ts', 'check-hotspot:a.ts']);
+  // Two chains that each cover less than 80 percent do not suppress the file finding.
+  assert.deepEqual(rules([file('a.ts', 200)], [group('a.ts', 100), group('a.ts', 60)]),
+    ['source-check-chain:a.ts', 'source-check-chain:a.ts', 'check-hotspot:a.ts']);
+  // A chain in another file never suppresses this file.
+  assert.deepEqual(rules([file('a.ts', 100)], [group('b.ts', 100)]), ['source-check-chain:b.ts', 'check-hotspot:a.ts']);
 });

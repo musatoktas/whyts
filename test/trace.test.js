@@ -214,7 +214,7 @@ test('canonical trace paths are looked up through the compiler when graph casing
 
 test('real compiler example keeps measured findings ahead of heuristics and resolves any sampled comparisons', async () => {
   const report = await analyze({ project: fileURLToPath(new URL('../examples/type-comparison/tsconfig.json', import.meta.url)) });
-  assert.equal(report.toolVersion, '0.3.0');
+  assert.equal(report.toolVersion, JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
   assert.equal(report.summary.compilerExitCode, 0);
   assert.equal(report.typeDescriptors.mode, 'selective-stream');
   assert.equal(report.typeDescriptors.selectionComplete, true);
@@ -258,4 +258,18 @@ test('terminal report puts source evidence before structure and sanitizes snippe
   assert.match(text, /target: Target.*main.ts:2:1/);
   assert.match(text, /1 source checks in one same-thread chain; durations overlap and must not be added/);
   assert.doesNotMatch(text, /\x1b/);
+});
+
+test('declaration positions do not rely on the deprecated scanner.getTokenPos', t => {
+  const { base, graph, args, event } = fixture(t);
+  const text = '// leading comment\n  export type Actual = string;\n';
+  graph.files.set(args.path, ts.createSourceFile(args.path, text, ts.ScriptTarget.Latest));
+  graph.ts = { ...ts, createScanner: (...scannerArgs) => {
+    const scanner = ts.createScanner(...scannerArgs);
+    return new Proxy(scanner, { get: (target, name) => name === 'getTokenPos' ? undefined : target[name] });
+  } };
+  const descriptor = { id: 1, symbolName: 'Actual', firstDeclaration: { path: args.path,
+    start: { line: 1, character: 1 }, end: { line: 2, character: 30 } } };
+  const result = traceDetails([event('structuredTypeRelatedTo', 0, 20000, { sourceId: 1, targetId: 2 })], [descriptor], base, graph);
+  assert.deepEqual(result.typeHotspots[0].source.declaration, { file: 'main.ts', line: 2, character: 3, scope: 'project' });
 });
