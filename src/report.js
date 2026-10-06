@@ -15,14 +15,26 @@ function comparisonLines(comparison) {
     `     source: ${typeDescription(comparison.source)}`, `     target: ${typeDescription(comparison.target)}`];
 }
 
+const shareNote = h => h.checkTimeShareUpperBoundPercent != null ? `  (at most ${h.checkTimeShareUpperBoundPercent}% of Check)` : '';
+
 export function renderReport(report, color = false) {
   const bold = s => color ? `\u001b[1m${s}\u001b[0m` : s;
   const lines = [bold('whyts'), `TypeScript ${report.typescriptVersion} · ${safe(report.project)}`, ''];
   const total = report.diagnostics['Total time'];
   const check = report.diagnostics['Check time'];
   lines.push(`Compiler: ${total ? total.value.toFixed(2) + 's' : 'n/a'} · Check: ${check ? check.value.toFixed(2) + 's' : 'n/a'} · Program files: ${report.summary.programFiles}`);
+  const dump = report.diagnostics['Dump types time'];
+  if (report.summary.wallMilliseconds !== undefined) lines.push(`Process wall time: ${(report.summary.wallMilliseconds / 1000).toFixed(2)}s` +
+    (dump ? ` · Trace type dump: ${dump.value.toFixed(2)}s (not included in Compiler total)` : ''));
   lines.push('Fresh cache · no emit · tracing enabled');
   if (report.summary.compilerExitCode !== 0) lines.push(`Compiler exited ${report.summary.compilerExitCode} with ${report.summary.errorCount} reported errors. Fix errors before comparing timings.`);
+  const errors = report.compilerErrors;
+  if (errors?.total) {
+    lines.push(`Error codes: ${errors.codes.map(c => `${c.code} x${c.count}`).join(', ')}`);
+    lines.push(`First ${errors.first.length} errors:`);
+    for (const e of errors.first) lines.push(`   ${e.file ? `${safe(e.file)}${e.line ? `:${e.line}:${e.character}` : ''}  ` : ''}${e.code}  ${safe(e.message)}`);
+    if (errors.measurementMayBeInvalid) lines.push(`WARNING: ${errors.missingDependencyErrors} of ${errors.total} errors are unresolved modules or type declarations. Dependencies may be missing or not built; these timings may not represent a healthy build.`);
+  }
   lines.push('', bold(`${report.findings.length} findings; measured checks first`));
   if (!report.findings.length) lines.push('No finding crossed a measurement threshold or matched a structural rule. Recorded intervals remain below; this does not establish that the project is fast.');
   const measured = report.findings.filter(f => f.confidence === 'measured');
@@ -40,17 +52,19 @@ export function renderReport(report, color = false) {
     }
     if (finding.evidence.comparisons) for (const comparison of finding.evidence.comparisons) lines.push(...comparisonLines(comparison));
     if (finding.evidence.alreadyRootFiles !== undefined) lines.push(`   ${finding.evidence.alreadyRootFiles} reached files are already configured roots; ${finding.evidence.directImporters} direct importers`);
+    if (finding.evidence.checkTimeShareUpperBoundPercent != null) lines.push(`   at most ${finding.evidence.checkTimeShareUpperBoundPercent}% of Check time (upper bound, not a predicted saving; inclusive interval measured under tracing)`);
+    if (finding.evidence.testRootsExcluded) lines.push(`   not listed: ${finding.evidence.testRootsExcluded} test/spec roots (tests are not expected to be imported)`);
     lines.push(`   ${safe(finding.suggestion)}`);
   };
   measured.forEach(renderFinding);
   if (report.projectHotspots?.length) {
     lines.push('', bold('Largest recorded project file-check intervals'));
-    for (const h of report.projectHotspots) lines.push(`   ${h.milliseconds.toFixed(1).padStart(8)} ms  ${safe(h.file)}`);
+    for (const h of report.projectHotspots) lines.push(`   ${h.milliseconds.toFixed(1).padStart(8)} ms  ${safe(h.file)}${shareNote(h)}`);
   }
   const remainingFiles = report.hotspots.filter(h => !report.projectHotspots?.some(p => p.file === h.file));
   if (remainingFiles.length) {
     lines.push('', bold(report.projectHotspots?.length ? 'Largest remaining recorded file-check intervals' : 'Largest recorded file-check intervals'));
-    for (const h of remainingFiles) lines.push(`   ${h.milliseconds.toFixed(1).padStart(8)} ms  ${safe(h.file)}`);
+    for (const h of remainingFiles) lines.push(`   ${h.milliseconds.toFixed(1).padStart(8)} ms  ${safe(h.file)}${shareNote(h)}`);
   }
   const covered = new Set(measured.flatMap(f => f.evidence.comparisons ?? []).map(c => `${c.source.id}:${c.target.id}`));
   const otherComparisons = (report.typeHotspots ?? []).filter(c => !covered.has(`${c.source.id}:${c.target.id}`));

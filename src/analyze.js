@@ -13,15 +13,39 @@ export const toolVersion = require('../package.json').version;
 const slash = p => p.split(path.sep).join('/');
 const clean = s => String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
 const display = (base, p) => clean(slash(path.relative(base, p)) || '.');
+const errorSummary = error => clean(String(error?.message ?? error).split('\n')[0].trim().slice(0, 200)) || 'unknown error';
 
-export function loadCompiler(base) {
+// Resolve an explicit --typescript value to the package's lib/typescript.js.
+function explicitCompilerPath(value) {
+  const target = path.resolve(value);
+  if (!fs.existsSync(target)) throw new Error(`--typescript path not found: ${clean(target)}`);
+  const candidates = fs.statSync(target).isDirectory()
+    ? [path.join(target, 'lib', 'typescript.js'), path.join(target, 'typescript.js')]
+    : [target];
+  const found = candidates.find(file => fs.existsSync(file) && fs.statSync(file).isFile() && path.basename(file) === 'typescript.js');
+  if (!found) {
+    let version;
+    try { version = JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf8')).version; } catch { /* Not a package directory. */ }
+    // TypeScript 7 ships a native compiler and no lib/typescript.js JavaScript API.
+    if (Number(String(version).split('.')[0]) >= 7) throw new Error(`TypeScript ${clean(version)} is unsupported. It ships a native compiler without the JavaScript API (lib/typescript.js) whyts uses. Point --typescript at a TypeScript 5.x or 6.x package.`);
+    throw new Error(`--typescript must be a typescript package directory or its lib/typescript.js: ${clean(target)}`);
+  }
+  return found;
+}
+
+export function loadCompiler(base, explicit) {
   let compilerPath;
-  try { compilerPath = createRequire(path.join(base, 'package.json')).resolve('typescript'); }
-  catch { compilerPath = require.resolve('typescript'); }
-  const ts = require(compilerPath);
+  if (explicit) compilerPath = explicitCompilerPath(explicit);
+  else {
+    try { compilerPath = createRequire(path.join(base, 'package.json')).resolve('typescript'); }
+    catch { compilerPath = require.resolve('typescript'); }
+  }
+  let ts;
+  try { ts = require(compilerPath); }
+  catch (error) { throw new Error(`Could not load the TypeScript compiler at ${clean(compilerPath)} (${errorSummary(error)}).`); }
   const major = Number(ts.version?.split('.')[0]);
   if (major < 5 || major >= 7 || !ts.createProgram) {
-    throw new Error(`TypeScript ${ts.version ?? 'unknown'} is unsupported. Use TypeScript 5.x or 6.x; native TypeScript 7 is not supported yet.`);
+    throw new Error(`TypeScript ${ts.version ?? 'unknown'} is unsupported. Use TypeScript 5.x or 6.x; native TypeScript 7 is not supported yet. Point to another compiler with --typescript <path>.`);
   }
   return { ts, compilerPath, tscPath: path.join(path.dirname(compilerPath), 'tsc.js') };
 }
@@ -55,7 +79,9 @@ function collectSpecifiers(ts, source) {
   let reexports = 0;
   const add = node => {
     if (node && ts.isStringLiteralLike(node)) {
-      const mode = ts.getModeForUsageLocation(source, node);
+      let mode;
+      try { mode = ts.getModeForUsageLocation(source, node); }
+      catch { mode = undefined; /* Unknown usage mode: resolve with the compiler default. */ }
       specs.set(`${node.text}:${mode}`, { spec: node.text, mode });
     }
   };
@@ -78,17 +104,23 @@ function collectSpecifiers(ts, source) {
 
 export function buildGraph(ts, project) {
   const { parsed, base } = project;
-  const program = ts.createProgram({ rootNames: parsed.fileNames, options: {
-    ...parsed.options, noEmit: true, generateTrace: undefined, generateCpuProfile: undefined
-  }, projectReferences: parsed.projectReferences });
+  const options = { ...parsed.options, noEmit: true, generateTrace: undefined, generateCpuProfile: undefined };
+  // Parent pointers are required by getModeForUsageLocation for require()/import() arguments.
+  const host = ts.createCompilerHost(options, true);
+  const program = ts.createProgram({ rootNames: parsed.fileNames, options, host, projectReferences: parsed.projectReferences });
   const sources = program.getSourceFiles();
   const files = new Map(sources.map(s => [path.resolve(s.fileName), s]));
   const edges = new Map();
   const incoming = new Map();
   const barrels = [];
+  const skipped = [];
   const cache = ts.createModuleResolutionCache(base, x => x, parsed.options);
   for (const [file, source] of files) {
-    const { specs, reexports } = collectSpecifiers(ts, source);
+    let collected;
+    // One unreadable file must not discard the analysis of the rest of the program.
+    try { collected = collectSpecifiers(ts, source); }
+    catch (error) { skipped.push({ file: display(base, file), reason: errorSummary(error) }); collected = { specs: new Map(), reexports: 0 }; }
+    const { specs, reexports } = collected;
     const deps = new Set();
     for (const { spec, mode } of specs.values()) {
       // Resolve each import using its actual ESM/CJS usage mode, including dynamic import.
@@ -112,7 +144,7 @@ export function buildGraph(ts, project) {
       barrels.push({ file, reexports });
     }
   }
-  return { ts, program, files, edges, incoming, barrels, roots: new Set(parsed.fileNames.map(f => path.resolve(f))) };
+  return { ts, program, files, edges, incoming, barrels, skipped, roots: new Set(parsed.fileNames.map(f => path.resolve(f))) };
 }
 
 export function reachable(edges, start) {
@@ -156,12 +188,41 @@ export function parseDiagnostics(output) {
   return result;
 }
 
-function runCompiler(tscPath, args, cwd, timeoutMs) {
+// Default compiler timeout. The slowest successful traced run measured while preparing 0.4
+// (drizzle-orm type-tests) took 267 s, mostly in the type dump that tsc excludes from Total time.
+export const DEFAULT_TIMEOUT_SECONDS = 900;
+export const PROGRESS_INTERVAL_MS = 30000;
+const nativeCrashSignals = new Set(['SIGABRT', 'SIGSEGV', 'SIGBUS', 'SIGKILL', 'SIGILL']);
+
+// Last non-empty lines of compiler stderr, sanitized and clipped.
+export function stderrTail(text, lines = 8) {
+  return text.split(/\r?\n/).map(l => clean(l.trim()).slice(0, 240)).filter(Boolean).slice(-lines);
+}
+
+export function compilerCrashMessage(signal, stderr, maxOldSpaceMb) {
+  const tail = stderrTail(stderr);
+  const heap = /heap out of memory|Reached heap limit|Allocation failed/i.test(stderr);
+  let message = `Compiler terminated by ${signal}.`;
+  if (heap) message += ' The compiler ran out of JavaScript heap memory.';
+  if (heap || nativeCrashSignals.has(signal)) {
+    message += maxOldSpaceMb
+      ? ` It was already limited to --max-old-space-size ${maxOldSpaceMb}; try a larger value if the machine has the memory.`
+      : ' Retry with --max-old-space-size <MB> (for example 8192) to raise the compiler heap limit.';
+    if (!heap) message += ' SIGABRT/SIGSEGV/SIGKILL without a heap message can also come from the operating system out-of-memory killer or a native crash.';
+  }
+  if (tail.length) message += `\nLast compiler stderr lines:\n${tail.map(l => `  ${l}`).join('\n')}`;
+  return message;
+}
+
+function runCompiler(tscPath, args, cwd, { timeoutMs, maxOldSpaceMb, onProgress, progressIntervalMs = PROGRESS_INTERVAL_MS }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [tscPath, ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+    const nodeArgs = maxOldSpaceMb ? [`--max-old-space-size=${maxOldSpaceMb}`] : [];
+    const child = spawn(process.execPath, [...nodeArgs, tscPath, ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
     let stdout = '', stderr = '', size = 0, failure;
+    const started = performance.now();
     const stop = message => { failure ??= new Error(message); child.kill(); };
-    const timer = setTimeout(() => stop(`Type checking exceeded ${timeoutMs / 1000}s. Increase --timeout.`), timeoutMs);
+    const timer = setTimeout(() => stop(`Type checking exceeded ${timeoutMs / 1000}s. tsc writes a trace type dump after checking that is not part of its reported Total time, so large projects can run much longer than Total time. Increase --timeout.`), timeoutMs);
+    const progress = onProgress ? setInterval(() => onProgress(Math.round((performance.now() - started) / 1000)), progressIntervalMs) : null;
     const cancel = () => stop('Analysis cancelled.');
     process.once('SIGINT', cancel);
     process.once('SIGTERM', cancel);
@@ -173,16 +234,47 @@ function runCompiler(tscPath, args, cwd, timeoutMs) {
     child.stdout.on('data', collect('stdout'));
     child.stderr.on('data', collect('stderr'));
     const cleanup = () => {
-      clearTimeout(timer); process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
+      clearTimeout(timer); if (progress) clearInterval(progress);
+      process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
     };
     child.on('error', error => { cleanup(); reject(error); });
     child.on('close', (code, signal) => {
       cleanup();
       if (failure) reject(failure);
-      else if (signal) reject(new Error(`Compiler terminated by ${signal}.`));
+      else if (signal) reject(new Error(compilerCrashMessage(signal, stderr, maxOldSpaceMb)));
       else resolve({ stdout, stderr, exitCode: code });
     });
   });
+}
+
+// tsc --pretty false prints "file(line,col): error TS1234: message"; some errors have no location.
+const moduleErrorCodes = new Set(['TS2307', 'TS2792', 'TS2688', 'TS7016', 'TS6053']);
+export function parseCompilerErrors(output, limit = 5, base = null) {
+  // tsc prints paths relative to its own cwd, which is the real path; a symlinked base (macOS /var) breaks naive relative paths.
+  let realBase = base;
+  if (base) { try { realBase = fs.realpathSync(base); } catch { /* Keep the given base. */ } }
+  const locate = file => {
+    if (!realBase) return clean(slash(file));
+    const absolute = path.resolve(realBase, file);
+    let real = absolute;
+    try { real = fs.realpathSync(absolute); } catch { /* A file that no longer exists keeps its resolved path. */ }
+    return display(realBase, real);
+  };
+  const first = [], counts = new Map();
+  let total = 0, missingDependencyErrors = 0;
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^(?:(.+?)\((\d+),(\d+)\): )?error (TS\d+): (.*)$/);
+    if (!match) continue;
+    total++;
+    counts.set(match[4], (counts.get(match[4]) ?? 0) + 1);
+    if (moduleErrorCodes.has(match[4])) missingDependencyErrors++;
+    if (first.length < limit) first.push({ file: match[1] ? locate(match[1]) : null, line: match[2] ? Number(match[2]) : null,
+      character: match[3] ? Number(match[3]) : null, code: match[4], message: clean(match[5].trim().slice(0, 200)) });
+  }
+  const codes = [...counts].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)).slice(0, 10);
+  // Half or more of all errors being unresolved modules/types means dependencies are probably missing or unbuilt.
+  const measurementMayBeInvalid = total > 0 && missingDependencyErrors * 2 >= total;
+  return { total, first, codes, missingDependencyErrors, measurementMayBeInvalid };
 }
 
 function duplicateTypes(graph, base) {
@@ -212,11 +304,15 @@ export function inspectProject(graph, project) {
       evidence: { include: include ?? ['**/* (default)'], rootFiles: graph.roots.size },
       suggestion: 'Review whether include can target source directories. A broad pattern alone does not prove wasted work.' });
   }
-  const candidates = [...graph.roots].filter(file => /(^|\/)(generated|dist|build|coverage|__tests__|tests?)(\/|\.)|\.(test|spec)\.[cm]?[jt]sx?$/.test(slash(path.relative(base, file))))
-    .filter(file => !graph.incoming.get(file)?.size);
-  if (candidates.length) findings.push({ rule: 'review-root-files', confidence: 'review', title: `${candidates.length} generated, output, or test roots have no observed importers`,
-    evidence: { count: candidates.length, files: candidates.slice(0, 20).map(p => display(base, p)) },
-    suggestion: 'Confirm whether these files belong in this check. Use a separate test config or narrower include where appropriate. Unimported roots may still be intentional.' });
+  const unimported = [...graph.roots].filter(file => !graph.incoming.get(file)?.size);
+  const isTest = file => /(^|\/)(__tests__|tests?)\/|\.(test|spec)\.[cm]?[jt]sx?$/.test(slash(path.relative(base, file)));
+  const isOutput = file => /(^|\/)(generated|dist|build|coverage)(\/|\.)/.test(slash(path.relative(base, file)));
+  // Tests are entry points by nature and are never imported, so they are counted instead of listed.
+  const testRoots = unimported.filter(isTest).length;
+  const candidates = unimported.filter(file => !isTest(file) && isOutput(file));
+  if (candidates.length) findings.push({ rule: 'review-root-files', confidence: 'review', title: `${candidates.length} generated or output roots have no observed importers`,
+    evidence: { count: candidates.length, files: candidates.slice(0, 20).map(p => display(base, p)), testRootsExcluded: testRoots },
+    suggestion: 'Confirm whether these files belong in this check. Use a narrower include where appropriate. Unimported roots may still be intentional.' });
   for (const { name, copies } of duplicateTypes(graph, base)) {
     findings.push({ rule: 'duplicate-types', confidence: 'observed', title: `Multiple loaded versions of ${clean(name)}`,
       evidence: { name: clean(name), copies }, suggestion: 'Inspect your package manager dependency tree and align compatible versions. Multiple versions may be required; do not deduplicate blindly.' });
@@ -240,8 +336,6 @@ export function inspectProject(graph, project) {
   return findings;
 }
 
-const errorSummary = error => clean(String(error?.message ?? error).split('\n')[0].trim().slice(0, 200)) || 'unknown error';
-
 // A file whose recorded check time is mostly covered by one chain is already explained by that chain.
 export const CHAIN_COVERAGE_THRESHOLD = 0.8;
 
@@ -258,6 +352,13 @@ export async function readTrace(traceFile, temporary, project, graph) {
     } catch (error) { result.warnings.push(`Trace could not be parsed (${errorSummary(error)}). Other diagnostics remain available.`); }
   }
   return result;
+}
+
+// Inclusive interval as a percentage of tsc's Check time. An upper bound, never a predicted saving:
+// intervals are inclusive samples recorded while tracing, which itself slows the check.
+export function withCheckShare(list, checkSeconds) {
+  return list.map(item => ({ ...item, checkTimeShareUpperBoundPercent: checkSeconds > 0
+    ? Math.round(item.milliseconds / (checkSeconds * 1000) * 1000) / 10 : null }));
 }
 
 export function measuredFindings({ hotspots, projectHotspots, sourceGroups }) {
@@ -280,7 +381,7 @@ export function measuredFindings({ hotspots, projectHotspots, sourceGroups }) {
 export async function analyze(options = {}) {
   const projectInput = path.resolve(options.project ?? '.');
   const compilerBase = fs.existsSync(projectInput) && fs.statSync(projectInput).isDirectory() ? projectInput : path.dirname(projectInput);
-  const compiler = loadCompiler(compilerBase);
+  const compiler = loadCompiler(compilerBase, options.typescript);
   const project = readProject(projectInput, compiler.ts);
   const graph = buildGraph(compiler.ts, project);
   const findings = inspectProject(graph, project);
@@ -291,13 +392,18 @@ export async function analyze(options = {}) {
     const args = ['--project', project.configPath, '--noEmit', '--emitDeclarationOnly', 'false',
       '--incremental', '--tsBuildInfoFile', path.join(temporary, 'cache.tsbuildinfo'),
       '--extendedDiagnostics', '--pretty', 'false', '--generateTrace', temporary];
-    const run = await runCompiler(compiler.tscPath, args, project.base, options.timeoutMs ?? 120000);
+    const run = await runCompiler(compiler.tscPath, args, project.base, {
+      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_SECONDS * 1000, maxOldSpaceMb: options.maxOldSpaceMb, onProgress: options.onProgress, progressIntervalMs: options.progressIntervalMs });
     const wallMilliseconds = performance.now() - started;
     const diagnostics = parseDiagnostics(run.stdout);
+    const compilerErrors = parseCompilerErrors(run.stdout, 5, project.base);
     if (!Object.keys(diagnostics).length) throw new Error(`Compiler produced no diagnostics. ${clean((run.stderr || run.stdout).slice(0, 2000))}`);
     const traceFile = path.join(temporary, 'trace.json');
     const trace = await readTrace(traceFile, temporary, project, graph);
-    const { hotspots, sourceHotspots, sourceGroups, typeHotspots, projectHotspots, typeDescriptors } = trace;
+    const checkSeconds = diagnostics['Check time']?.value;
+    const hotspots = withCheckShare(trace.hotspots, checkSeconds), projectHotspots = withCheckShare(trace.projectHotspots, checkSeconds),
+      sourceHotspots = withCheckShare(trace.sourceHotspots, checkSeconds), sourceGroups = withCheckShare(trace.sourceGroups, checkSeconds);
+    const { typeHotspots, typeDescriptors } = trace;
     const traceWarnings = trace.warnings;
     findings.push(...measuredFindings({ hotspots, projectHotspots, sourceGroups }));
     const confidenceRank = { measured: 0, observed: 1, review: 2 };
@@ -305,11 +411,14 @@ export async function analyze(options = {}) {
     return { schemaVersion: 1, toolVersion, typescriptVersion: compiler.ts.version,
       project: display(process.cwd(), project.configPath),
       summary: { programFiles: graph.files.size, rootFiles: graph.roots.size, compilerExitCode: run.exitCode,
-        errorCount: (run.stdout.match(/\berror TS\d+:/g) ?? []).length, wallMilliseconds,
+        errorCount: compilerErrors.total, wallMilliseconds, dumpTypesSeconds: diagnostics['Dump types time']?.value ?? null,
         mode: 'fresh-cache, no-emit, tracing enabled', analysisOverheadExcluded: true },
-      diagnostics, findings, hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots, typeDescriptors, warnings: [...traceWarnings,
+      diagnostics, compilerErrors, findings, hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots, typeDescriptors, warnings: [...traceWarnings,
         project.parsed.projectReferences?.length ? 'Referenced projects are not built; existing declaration outputs may be required.' : null,
-        'Tracing adds overhead. Compare timings using the same compiler, cache mode, and tracing settings.'
+        graph.skipped.length ? `Import analysis skipped ${graph.skipped.length} file${graph.skipped.length === 1 ? '' : 's'} (${graph.skipped.slice(0, 3).map(f => f.file).join(', ')}${graph.skipped.length > 3 ? ', ...' : ''}); import graph findings may be incomplete.` : null,
+        compilerErrors.measurementMayBeInvalid ? `${compilerErrors.missingDependencyErrors} of ${compilerErrors.total} compiler errors are unresolved modules or type declarations (${[...moduleErrorCodes].join(', ')}). Dependencies may be missing or not built, so these timings may not represent a healthy build.` : null,
+        'Tracing adds overhead. Compare timings using the same compiler, cache mode, and tracing settings.',
+        'Types, Instantiations and Memory counters in diagnostics come from the traced run; tracing inflates them. Do not compare them with plain tsc --extendedDiagnostics output.'
       ].filter(Boolean) };
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
@@ -317,7 +426,7 @@ export async function analyze(options = {}) {
 export function explain(options) {
   const input = path.resolve(options.project ?? '.');
   const base = fs.existsSync(input) && fs.statSync(input).isDirectory() ? input : path.dirname(input);
-  const compiler = loadCompiler(base);
+  const compiler = loadCompiler(base, options.typescript);
   const project = readProject(input, compiler.ts);
   return explainFile(buildGraph(compiler.ts, project), options.file, project.base);
 }
