@@ -214,7 +214,7 @@ test('canonical trace paths are looked up through the compiler when graph casing
 
 test('real compiler example keeps measured findings ahead of heuristics and resolves any sampled comparisons', async () => {
   const report = await analyze({ project: fileURLToPath(new URL('../examples/type-comparison/tsconfig.json', import.meta.url)) });
-  assert.equal(report.toolVersion, '0.3.0');
+  assert.equal(report.toolVersion, JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
   assert.equal(report.summary.compilerExitCode, 0);
   assert.equal(report.typeDescriptors.mode, 'selective-stream');
   assert.equal(report.typeDescriptors.selectionComplete, true);

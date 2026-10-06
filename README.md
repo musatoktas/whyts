@@ -14,7 +14,7 @@ Requires Node.js 20+ and a TypeScript project with dependencies installed.
 npx whyts --project .
 ```
 
-For repeatable runs, pin a version: `npx whyts@0.3.0 --project .`
+For repeatable runs, pin a version: `npx whyts@0.3.1 --project .`
 
 To run from a checkout:
 
