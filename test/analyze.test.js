@@ -123,7 +123,7 @@ test('CLI supports spaces in paths, explain JSON, help, and actionable failures'
   const dir = fixture(t, { compilerOptions: options, files: ['has spaces.ts'] }, { 'has spaces.ts': 'export const x = 1;' });
   const run = args => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
   assert.equal(run(['--help']).status, 0);
-  assert.equal(run(['--version']).stdout.trim(), '0.2.0');
+  assert.equal(run(['--version']).stdout.trim(), '0.3.0');
   const result = run(['explain', 'has spaces.ts', '-p', dir, '--json']);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).configuredRoot, true);

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { analyze, buildGraph, inspectProject, readProject } from '../src/analyze.js';
-import { traceDetails, traceSpans } from '../src/trace.js';
+import { traceDetails, traceSpans, selectedTypeIds, resolveTraceTypes } from '../src/trace.js';
 import { renderReport } from '../src/report.js';
 
 function fixture(t) {
@@ -97,6 +97,72 @@ test('begin/end pairing is isolated per thread and invalid or unfinished spans a
   assert.equal(result.typeHotspots[0].milliseconds, 29);
 });
 
+test('one temporal chain leaves room for other hotspots and focuses a costly deferred expression', t => {
+  const { base, graph, args, event } = fixture(t);
+  const events = [event('checkVariableDeclaration', 0, 100000)];
+  // Temporal nesting can visit earlier offsets: it does not imply AST nesting.
+  for (let i = 0; i < 6; i++) events.push(event('checkExpression', 100 + i * 100, 99000 - i * 100,
+    { ...args, pos: 7 - i, end: 12 - i, kind: i === 5 ? ts.SyntaxKind.Identifier : ts.SyntaxKind.CallExpression }));
+  events.push(event('checkExpression', 150000, 60000, { ...args, pos: 32, end: 40 }),
+    event('checkExpression', 250000, 40000, { ...args, pos: 41, end: 45 }));
+  const details = traceDetails(events.reverse(), [], base, graph);
+  assert.equal(details.sourceHotspots.length, 5);
+  assert.equal(details.sourceGroups.length, 3);
+  const chain = details.sourceGroups[0];
+  assert.equal(chain.memberCount, 7);
+  assert.equal(chain.milliseconds, 100);
+  assert.equal(chain.root.pos, args.pos);
+  assert.equal(chain.pos, 3);
+  assert.equal(chain.focusMilliseconds, 98.6);
+  assert.equal(chain.members.length, 5);
+  assert.ok(chain.members.reduce((sum, m) => sum + m.milliseconds, 0) > chain.milliseconds);
+});
+
+test('chains isolate files and threads, union repeated root intervals and hydrate selected comparisons', t => {
+  const { base, graph, args, descriptors, event } = fixture(t);
+  const other = path.join(base, 'other.ts');
+  graph.files.set(other, ts.createSourceFile(other, 'const other = 1;', ts.ScriptTarget.Latest));
+  const otherArgs = { ...args, path: other, pos: 0, end: 10 };
+  const events = [event('checkVariableDeclaration', 0, 50000),
+    event('checkExpression', 5000, 30000, { ...args, pos: 0, end: 10 }),
+    event('structuredTypeRelatedTo', 10000, 20000, { sourceId: 1, targetId: 2 }),
+    event('checkExpression', 6000, 25000, otherArgs, 2),
+    event('structuredTypeRelatedTo', 11000, 10000, { sourceId: 3, targetId: 4 }, 2),
+    event('checkExpression', 31000, 1000, otherArgs),
+    event('structuredTypeRelatedTo', 31100, 500, { sourceId: 5, targetId: 6 }),
+    event('checkExpression', 0, 70000, args, 3),
+    event('checkVariableDeclaration', 25000, 50000),
+    event('structuredTypeRelatedTo', 80000, 1000, { sourceId: 7, targetId: 8 })];
+  const details = traceDetails(events, [], base, graph);
+  assert.equal(details.sourceGroups.length, 4);
+  const main = details.sourceGroups.find(h => h.root.event === 'checkVariableDeclaration');
+  assert.equal(main.milliseconds, 75);
+  assert.equal(main.memberCount, 2);
+  assert.deepEqual(main.comparisons.map(c => c.source.id), [1]);
+  assert.equal(details.sourceGroups.find(h => h.milliseconds === 70).comparisons.length, 0);
+  assert.deepEqual([...selectedTypeIds(details)].sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8]);
+  const resolved = resolveTraceTypes(details, descriptors, base, graph);
+  assert.equal(resolved.sourceGroups.find(h => h.milliseconds === 75).comparisons[0].source.label, 'Source');
+  assert.equal(resolved.sourceGroups.find(h => h.milliseconds === 25).comparisons[0].source.label, 'type #3 (unavailable)');
+});
+
+test('type declarations skip leading comments and CRLF with the project compiler scanner', t => {
+  const { base, graph, args, event } = fixture(t);
+  const text = '\r\n/** Docs with { \\"[]\\" } */\r\n// a comment\r\n/* more */\r\n  export type Actual = string;\r\n';
+  const source = ts.createSourceFile(args.path, text, ts.ScriptTarget.Latest);
+  graph.files.set(args.path, source);
+  const descriptor = { id: 1, symbolName: 'Actual', firstDeclaration: { path: args.path,
+    start: { line: 1, character: 1 }, end: { line: 5, character: 31 } } };
+  const result = traceDetails([event('structuredTypeRelatedTo', 0, 20000, { sourceId: 1, targetId: 2 })], [descriptor], base, graph);
+  assert.deepEqual(result.typeHotspots[0].source.declaration, { file: 'main.ts', line: 5, character: 3, scope: 'project' });
+  const replay = traceDetails([event('checkExpression', 0, 30000),
+    event('structuredTypeRelatedTo', 1, 20000, { sourceId: 1, targetId: 2 })], [descriptor], base);
+  assert.equal(replay.sourceGroups[0].locationAvailable, false);
+  assert.equal(replay.sourceGroups[0].line, null);
+  assert.equal(replay.typeHotspots[0].source.declaration.locationKind, 'trace');
+  assert.equal(replay.typeHotspots[0].source.declaration.line, 1);
+});
+
 test('project files remain visible even when six dependency intervals are larger', t => {
   const { base, graph, args, descriptors, event } = fixture(t);
   const dependency = path.join(base, 'node_modules', 'package', 'index.d.ts');
@@ -148,8 +214,10 @@ test('canonical trace paths are looked up through the compiler when graph casing
 
 test('real compiler example keeps measured findings ahead of heuristics and resolves any sampled comparisons', async () => {
   const report = await analyze({ project: fileURLToPath(new URL('../examples/type-comparison/tsconfig.json', import.meta.url)) });
-  assert.equal(report.toolVersion, '0.2.0');
+  assert.equal(report.toolVersion, '0.3.0');
   assert.equal(report.summary.compilerExitCode, 0);
+  assert.equal(report.typeDescriptors.mode, 'selective-stream');
+  assert.equal(report.typeDescriptors.selectionComplete, true);
   assert.ok(report.projectHotspots.some(h => h.file === 'client.ts'));
   // Expression/type spans are sampled: validate emitted records, without a timing threshold.
   for (const hotspot of report.sourceHotspots) {
@@ -157,6 +225,14 @@ test('real compiler example keeps measured findings ahead of heuristics and reso
     assert.ok(hotspot.line > 0 && hotspot.character > 0 && hotspot.snippet.length > 0);
     for (const comparison of hotspot.comparisons) {
       assert.ok(Number.isInteger(comparison.source.id));
+      assert.doesNotMatch(comparison.source.label, /unavailable/);
+      assert.doesNotMatch(comparison.target.label, /unavailable/);
+    }
+  }
+  for (const group of report.sourceGroups) {
+    assert.ok(group.members.length > 0 && group.memberCount >= group.members.length);
+    assert.ok(group.root.line > 0 && group.focusMilliseconds <= group.milliseconds);
+    for (const comparison of group.comparisons) {
       assert.doesNotMatch(comparison.source.label, /unavailable/);
       assert.doesNotMatch(comparison.target.label, /unavailable/);
     }
@@ -170,7 +246,7 @@ test('terminal report puts source evidence before structure and sanitizes snippe
   const { base, graph, descriptors, event } = fixture(t);
   const details = traceDetails([event('checkVariableDeclaration', 0, 30000),
     event('structuredTypeRelatedTo', 1000, 20000, { sourceId: 1, targetId: 2 })], descriptors, base, graph);
-  const evidence = { ...details.sourceHotspots[0], snippet: '\x1b[31msecret' };
+  const evidence = { ...details.sourceGroups[0], snippet: '\x1b[31msecret' };
   evidence.comparisons[0].source.label = '\x1b[2JSource';
   const report = { typescriptVersion: '5.9.3', project: 'tsconfig.json', summary: { programFiles: 1, compilerExitCode: 0 },
     diagnostics: {}, findings: [{ confidence: 'review', title: 'Broad inclusion', evidence: {}, suggestion: 'Review' },
@@ -180,5 +256,6 @@ test('terminal report puts source evidence before structure and sanitizes snippe
   assert.ok(text.indexOf('Project structure') < text.indexOf('Broad inclusion'));
   assert.match(text, /source: \?\[2JSource/);
   assert.match(text, /target: Target.*main.ts:2:1/);
+  assert.match(text, /1 source checks in one same-thread chain; durations overlap and must not be added/);
   assert.doesNotMatch(text, /\x1b/);
 });

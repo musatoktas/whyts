@@ -49,7 +49,7 @@ function parse(args) {
 try {
   const options = parse(process.argv.slice(2));
   if (options.help) process.stdout.write(help);
-  else if (options.version) process.stdout.write('0.2.0\n');
+  else if (options.version) process.stdout.write('0.3.0\n');
   else {
     if (!options.file && process.stderr.isTTY) process.stderr.write('Inspecting the TypeScript program and running a fresh traced check…\n');
     const result = options.file ? explain(options) : await analyze(options);

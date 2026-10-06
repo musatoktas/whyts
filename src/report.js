@@ -6,7 +6,7 @@ function typeDescription(type) {
   if (type.intersectionMembers !== undefined) details.push(`${type.intersectionMembers} intersection members`);
   const declaration = type.declaration;
   return `${safe(type.label)} (#${type.id})${details.length ? ' [' + details.map(safe).join(', ') + ']' : ''}` +
-    (declaration ? ` at ${safe(declaration.file)}:${declaration.line}:${declaration.character} [${declaration.scope}]` : '');
+    (declaration ? ` at ${safe(declaration.file)}:${declaration.line}:${declaration.character} [${declaration.scope}]${declaration.locationKind === 'trace' ? ' (raw trace position)' : ''}` : '');
 }
 
 function comparisonLines(comparison) {
@@ -34,6 +34,10 @@ export function renderReport(report, color = false) {
     if (finding.evidence.copies) lines.push(...finding.evidence.copies.map(c => `   ${safe(c.version)} at ${safe(c.path)}`));
     if (finding.evidence.snippet) lines.push(`   ${safe(finding.evidence.snippet)}`);
     if (finding.evidence.scope) lines.push(`   scope: ${safe(finding.evidence.scope)}`);
+    if (finding.evidence.members) {
+      lines.push(`   ${finding.evidence.memberCount} source checks in one same-thread chain; durations overlap and must not be added.`);
+      for (const member of finding.evidence.members) lines.push(`     ${safe(member.file)}:${member.line}:${member.character}  ${member.milliseconds.toFixed(1)} ms  ${safe(member.snippet)}`);
+    }
     if (finding.evidence.comparisons) for (const comparison of finding.evidence.comparisons) lines.push(...comparisonLines(comparison));
     if (finding.evidence.alreadyRootFiles !== undefined) lines.push(`   ${finding.evidence.alreadyRootFiles} reached files are already configured roots; ${finding.evidence.directImporters} direct importers`);
     lines.push(`   ${safe(finding.suggestion)}`);
@@ -58,6 +62,8 @@ export function renderReport(report, color = false) {
     lines.push('', bold('Project structure; savings are unmeasured'));
     structural.forEach((finding, i) => renderFinding(finding, measured.length + i));
   }
+  if (report.typeDescriptors?.requestedIds) lines.push('',
+    `Type descriptors: ${report.typeDescriptors.resolvedIds}/${report.typeDescriptors.requestedIds} selected IDs resolved; file ${report.typeDescriptors.fileBytes ?? 'unknown'} bytes, retained ${report.typeDescriptors.retainedBytes} bytes.`);
   lines.push('', ...report.warnings.map(w => `Note: ${safe(w)}`), '', 'Why is a file included? whyts explain <file> --project <tsconfig>');
   return lines.join('\n') + '\n';
 }
