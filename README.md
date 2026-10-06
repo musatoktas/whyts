@@ -11,10 +11,12 @@ A small CLI that turns compiler diagnostics, traces, and import relationships in
 Requires Node.js 20+ and a TypeScript project with dependencies installed.
 
 ```sh
-npx --yes github:musatoktas/whyts --project .
+npx whyts --project .
 ```
 
-The npm package has not been published yet. Install from GitHub or run a checkout:
+For repeatable runs, pin a version: `npx whyts@0.3.0 --project .`
+
+To run from a checkout:
 
 ```sh
 git clone https://github.com/musatoktas/whyts.git
@@ -23,8 +25,6 @@ npm ci --ignore-scripts
 npm run demo
 node src/cli.js --project /path/to/your/tsconfig.json
 ```
-
-For a repeatable GitHub install, pin a commit rather than the moving default branch.
 
 ## What it finds
 
