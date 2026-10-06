@@ -14,17 +14,19 @@ Options:
       --json      Machine-readable output; progress stays on stderr
       --timeout   Compiler timeout in seconds (default: 900)
       --max-old-space-size <MB>
-                  Heap limit for the compiler process (node --max-old-space-size)
+                  Heap limit for the compiler process (node --max-old-space-size);
+                  ignored with a TypeScript 7 compiler
       --typescript <path>
                   TypeScript package directory or its lib/typescript.js to use
-                  instead of the project's own (must be 5.x or 6.x)
+                  instead of the project's own (5.x, 6.x or 7.x)
       --no-color  Disable ANSI styling
   -h, --help     Show help
   -v, --version  Show version
 
 Paths for explain are relative to the tsconfig directory.
 No source edits, network calls, lifecycle scripts, or emitted build outputs.
-Supports the TypeScript 5.x and 6.x JavaScript compiler.
+Supports TypeScript 5.x and 6.x, and the native TypeScript 7 compiler (experimental;
+the traced run uses one checker, so type ids stay unambiguous).
 `;
 
 function parse(args) {

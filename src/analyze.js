@@ -15,7 +15,35 @@ const clean = s => String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
 const display = (base, p) => clean(slash(path.relative(base, p)) || '.');
 const errorSummary = error => clean(String(error?.message ?? error).split('\n')[0].trim().slice(0, 200)) || 'unknown error';
 
-// Resolve an explicit --typescript value to the package's lib/typescript.js.
+// A typescript@7 package ships a native compiler and no lib/typescript.js JavaScript API.
+function nativePackage(dir) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+    if (pkg.name === 'typescript' && Number(String(pkg.version).split('.')[0]) >= 7) return { dir, version: String(pkg.version) };
+  } catch { /* Not a package directory. */ }
+  return null;
+}
+
+// Walk up from a resolved file (typescript@7 resolves "." to lib/version.cjs) to its package root.
+function nativePackageFor(file) {
+  for (let dir = path.dirname(file), parent; ; dir = parent) {
+    const found = nativePackage(dir);
+    if (found) return found;
+    parent = path.dirname(dir);
+    if (parent === dir || path.basename(dir) === 'node_modules') return null;
+  }
+}
+
+// Native trace "kind" values use the Go compiler's SyntaxKind numbering, which differs from 5.x/6.x (Identifier 80 vs 79).
+function nativeIdentifierKind(dir) {
+  try {
+    const text = fs.readFileSync(path.join(dir, 'dist', 'enums', 'syntaxKind.enum.js'), 'utf8');
+    const match = text.match(/SyntaxKind\["Identifier"\]\s*=\s*(\d+)/);
+    if (match) return Number(match[1]);
+  } catch { /* Fall back to the number measured with 7.0.2. */ }
+  return 79;
+}
+
 function explicitCompilerPath(value) {
   const target = path.resolve(value);
   if (!fs.existsSync(target)) throw new Error(`--typescript path not found: ${clean(target)}`);
@@ -24,33 +52,49 @@ function explicitCompilerPath(value) {
     : [target];
   const found = candidates.find(file => fs.existsSync(file) && fs.statSync(file).isFile() && path.basename(file) === 'typescript.js');
   if (!found) {
-    let version;
-    try { version = JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf8')).version; } catch { /* Not a package directory. */ }
-    // TypeScript 7 ships a native compiler and no lib/typescript.js JavaScript API.
-    if (Number(String(version).split('.')[0]) >= 7) throw new Error(`TypeScript ${clean(version)} is unsupported. It ships a native compiler without the JavaScript API (lib/typescript.js) whyts uses. Point --typescript at a TypeScript 5.x or 6.x package.`);
+    if (fs.statSync(target).isDirectory() && nativePackage(target)) return { native: nativePackage(target) };
     throw new Error(`--typescript must be a typescript package directory or its lib/typescript.js: ${clean(target)}`);
   }
-  return found;
+  return { file: found };
+}
+
+// The JavaScript API is only used for the import graph and source positions. With a native (7.x) compiler
+// it comes from whyts' own typescript dependency; the native executable does the timed check and the trace.
+function ownJavaScriptCompiler() {
+  let ts;
+  try { ts = require('typescript'); }
+  catch (error) { throw new Error(`TypeScript 7 needs whyts' bundled TypeScript 5.x/6.x JavaScript API for the import graph, but it could not be loaded (${errorSummary(error)}).`); }
+  const major = Number(ts.version?.split('.')[0]);
+  if (major < 5 || major >= 7 || !ts.createProgram) throw new Error(`whyts' own typescript package (${ts.version ?? 'unknown'}) is not a 5.x or 6.x JavaScript API.`);
+  return ts;
 }
 
 export function loadCompiler(base, explicit) {
-  let compilerPath;
-  if (explicit) compilerPath = explicitCompilerPath(explicit);
-  else {
+  let compilerPath, native = null;
+  if (explicit) {
+    const found = explicitCompilerPath(explicit);
+    if (found.native) native = found.native; else compilerPath = found.file;
+  } else {
     try { compilerPath = createRequire(path.join(base, 'package.json')).resolve('typescript'); }
     catch { compilerPath = require.resolve('typescript'); }
+    native = nativePackageFor(compilerPath);
+  }
+  if (native) {
+    const tscPath = path.join(native.dir, 'bin', 'tsc');
+    if (!fs.existsSync(tscPath)) throw new Error(`TypeScript ${clean(native.version)} package has no bin/tsc: ${clean(native.dir)}`);
+    return { ts: ownJavaScriptCompiler(), compilerPath: tscPath, tscPath, native: { ...native, identifierKind: nativeIdentifierKind(native.dir) } };
   }
   let ts;
   try { ts = require(compilerPath); }
   catch (error) { throw new Error(`Could not load the TypeScript compiler at ${clean(compilerPath)} (${errorSummary(error)}).`); }
   const major = Number(ts.version?.split('.')[0]);
   if (major < 5 || major >= 7 || !ts.createProgram) {
-    throw new Error(`TypeScript ${ts.version ?? 'unknown'} is unsupported. Use TypeScript 5.x or 6.x; native TypeScript 7 is not supported yet. Point to another compiler with --typescript <path>.`);
+    throw new Error(`TypeScript ${ts.version ?? 'unknown'} is unsupported. Use TypeScript 5.x, 6.x or 7.x; point to another compiler with --typescript <path>.`);
   }
-  return { ts, compilerPath, tscPath: path.join(path.dirname(compilerPath), 'tsc.js') };
+  return { ts, compilerPath, tscPath: path.join(path.dirname(compilerPath), 'tsc.js'), native: null };
 }
 
-export function readProject(project, ts) {
+export function readProject(project, ts, { native = false } = {}) {
   let configPath = path.resolve(project);
   if (!fs.existsSync(configPath)) throw new Error(`Project not found: ${clean(configPath)}`);
   if (fs.statSync(configPath).isDirectory()) {
@@ -63,10 +107,14 @@ export function readProject(project, ts) {
   });
   errors.push(...(parsed?.errors ?? []));
   if (errors.length || !parsed) {
-    throw new Error(clean(ts.formatDiagnostics(errors, {
+    const details = clean(ts.formatDiagnostics(errors, {
       getCanonicalFileName: x => x, getCurrentDirectory: ts.sys.getCurrentDirectory,
       getNewLine: () => '\n'
-    })));
+    }));
+    // With a native compiler, the project may use a setting that only TypeScript 7 knows.
+    throw new Error(native
+      ? `whyts reads the tsconfig with its own TypeScript ${ts.version}, and that version cannot read it. The file may use a setting that only TypeScript 7 supports. Update the typescript dependency of whyts, or remove that setting for this run.\n${details}`
+      : details);
   }
   if (!parsed.fileNames.length && parsed.projectReferences?.length) {
     throw new Error('This is a solution config. Select a referenced leaf project with --project; whyts does not build project references.');
@@ -110,6 +158,9 @@ export function buildGraph(ts, project) {
   const program = ts.createProgram({ rootNames: parsed.fileNames, options, host, projectReferences: parsed.projectReferences });
   const sources = program.getSourceFiles();
   const files = new Map(sources.map(s => [path.resolve(s.fileName), s]));
+  // Native types.json declaration paths are lowercased even on case-sensitive file systems.
+  const lowerFiles = new Map();
+  for (const [file, source] of files) { const key = file.toLowerCase(); if (!lowerFiles.has(key)) lowerFiles.set(key, source); }
   const edges = new Map();
   const incoming = new Map();
   const barrels = [];
@@ -144,7 +195,7 @@ export function buildGraph(ts, project) {
       barrels.push({ file, reexports });
     }
   }
-  return { ts, program, files, edges, incoming, barrels, skipped, roots: new Set(parsed.fileNames.map(f => path.resolve(f))) };
+  return { ts, program, files, lowerFiles, edges, incoming, barrels, skipped, roots: new Set(parsed.fileNames.map(f => path.resolve(f))) };
 }
 
 export function reachable(edges, start) {
@@ -339,16 +390,19 @@ export function inspectProject(graph, project) {
 // A file whose recorded check time is mostly covered by one chain is already explained by that chain.
 export const CHAIN_COVERAGE_THRESHOLD = 0.8;
 
-export async function readTrace(traceFile, temporary, project, graph) {
+export async function readTrace(traceFile, temporary, project, graph, native = null) {
   const result = { hotspots: [], sourceHotspots: [], sourceGroups: [], typeHotspots: [], projectHotspots: [], typeDescriptors: null, warnings: [] };
   if (!fs.existsSync(traceFile)) result.warnings.push('Compiler did not emit a trace; no hotspot measurements are available.');
   else if (fs.statSync(traceFile).size > 128 * 1024 * 1024) result.warnings.push('Trace exceeds 128 MiB; hotspot parsing skipped to bound memory usage.');
   else {
     try {
-      const details = traceDetails(JSON.parse(fs.readFileSync(traceFile, 'utf8')), [], project.base, graph);
-      const loaded = await readTypeDescriptors(path.join(temporary, 'types.json'), selectedTypeIds(details));
+      // Native traces: UTF-8 byte offsets, Go SyntaxKind numbers, and one types_<n>.json per checker (a single checker is forced).
+      const traceGraph = native ? Object.assign(Object.create(graph), { native }) : graph;
+      const details = traceDetails(JSON.parse(fs.readFileSync(traceFile, 'utf8')), [], project.base, traceGraph);
+      const typesFile = path.join(temporary, native ? 'types_0.json' : 'types.json');
+      const loaded = await readTypeDescriptors(typesFile, selectedTypeIds(details));
       result.typeDescriptors = loaded.stats; result.warnings.push(...loaded.warnings);
-      Object.assign(result, resolveTraceTypes(details, loaded.descriptors, project.base, graph));
+      Object.assign(result, resolveTraceTypes(details, loaded.descriptors, project.base, traceGraph));
     } catch (error) { result.warnings.push(`Trace could not be parsed (${errorSummary(error)}). Other diagnostics remain available.`); }
   }
   return result;
@@ -378,11 +432,26 @@ export function measuredFindings({ hotspots, projectHotspots, sourceGroups }) {
   return findings;
 }
 
+// Messages for a native (TypeScript 7) run. The Check time of a one-checker run is slower than a default parallel run.
+export const NATIVE_EXPERIMENTAL_WARNING = 'TypeScript 7 support is experimental. The import graph and source positions come from the TypeScript 5.x/6.x package of whyts; timings and the trace come from the native compiler.';
+export const NATIVE_ONE_CHECKER_WARNING = 'Check time was measured with one checker (`--checkers 1`); do not compare it with a default parallel `tsc` run.';
+export const NATIVE_HEAP_WARNING = '--max-old-space-size was ignored. The native TypeScript 7 compiler is not a Node.js process and has no JavaScript heap limit to set.';
+
+// The graph comes from another compiler than the one that did the check. A large gap in file counts means module resolution may differ.
+// Both counts include library files, and the two compilers do not ship identical library sets, so a small gap is expected.
+export const FILE_COUNT_TOLERANCE = { absolute: 25, relative: 0.1 };
+export function fileCountWarning(graphFiles, nativeFiles, tolerance = FILE_COUNT_TOLERANCE) {
+  if (!Number.isFinite(nativeFiles) || nativeFiles <= 0) return null;
+  const gap = Math.abs(graphFiles - nativeFiles);
+  if (gap <= tolerance.absolute || gap <= tolerance.relative * Math.max(graphFiles, nativeFiles)) return null;
+  return `The import graph has ${graphFiles} files, and the native compiler reports ${nativeFiles} files. Module resolution may differ between the two compilers. Import graph findings and source positions may be incomplete or wrong for this project.`;
+}
+
 export async function analyze(options = {}) {
   const projectInput = path.resolve(options.project ?? '.');
   const compilerBase = fs.existsSync(projectInput) && fs.statSync(projectInput).isDirectory() ? projectInput : path.dirname(projectInput);
   const compiler = loadCompiler(compilerBase, options.typescript);
-  const project = readProject(projectInput, compiler.ts);
+  const project = readProject(projectInput, compiler.ts, { native: !!compiler.native });
   const graph = buildGraph(compiler.ts, project);
   const findings = inspectProject(graph, project);
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-'));
@@ -392,14 +461,17 @@ export async function analyze(options = {}) {
     const args = ['--project', project.configPath, '--noEmit', '--emitDeclarationOnly', 'false',
       '--incremental', '--tsBuildInfoFile', path.join(temporary, 'cache.tsbuildinfo'),
       '--extendedDiagnostics', '--pretty', 'false', '--generateTrace', temporary];
+    // Native checking is parallel by default (4 checkers) and every checker numbers its own types in its own types_<n>.json.
+    // One checker keeps type ids unambiguous and the trace comparable with 5.x/6.x. Several checkers would need checkerId-qualified ids.
+    if (compiler.native) args.push('--checkers', '1');
     const run = await runCompiler(compiler.tscPath, args, project.base, {
-      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_SECONDS * 1000, maxOldSpaceMb: options.maxOldSpaceMb, onProgress: options.onProgress, progressIntervalMs: options.progressIntervalMs });
+      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_SECONDS * 1000, maxOldSpaceMb: compiler.native ? undefined : options.maxOldSpaceMb, onProgress: options.onProgress, progressIntervalMs: options.progressIntervalMs });
     const wallMilliseconds = performance.now() - started;
     const diagnostics = parseDiagnostics(run.stdout);
     const compilerErrors = parseCompilerErrors(run.stdout, 5, project.base);
     if (!Object.keys(diagnostics).length) throw new Error(`Compiler produced no diagnostics. ${clean((run.stderr || run.stdout).slice(0, 2000))}`);
     const traceFile = path.join(temporary, 'trace.json');
-    const trace = await readTrace(traceFile, temporary, project, graph);
+    const trace = await readTrace(traceFile, temporary, project, graph, compiler.native);
     const checkSeconds = diagnostics['Check time']?.value;
     const hotspots = withCheckShare(trace.hotspots, checkSeconds), projectHotspots = withCheckShare(trace.projectHotspots, checkSeconds),
       sourceHotspots = withCheckShare(trace.sourceHotspots, checkSeconds), sourceGroups = withCheckShare(trace.sourceGroups, checkSeconds);
@@ -408,17 +480,24 @@ export async function analyze(options = {}) {
     findings.push(...measuredFindings({ hotspots, projectHotspots, sourceGroups }));
     const confidenceRank = { measured: 0, observed: 1, review: 2 };
     findings.sort((a, b) => confidenceRank[a.confidence] - confidenceRank[b.confidence]);
-    return { schemaVersion: 1, toolVersion, typescriptVersion: compiler.ts.version,
+    return { schemaVersion: 1, toolVersion, typescriptVersion: compiler.native?.version ?? compiler.ts.version,
+      ...(compiler.native ? { compiler: 'native', experimental: true, graphTypescriptVersion: compiler.ts.version, checkers: 1 } : {}),
       project: display(process.cwd(), project.configPath),
       summary: { programFiles: graph.files.size, rootFiles: graph.roots.size, compilerExitCode: run.exitCode,
         errorCount: compilerErrors.total, wallMilliseconds, dumpTypesSeconds: diagnostics['Dump types time']?.value ?? null,
         mode: 'fresh-cache, no-emit, tracing enabled', analysisOverheadExcluded: true },
-      diagnostics, compilerErrors, findings, hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots, typeDescriptors, warnings: [...traceWarnings,
+      diagnostics, compilerErrors, findings, hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots, typeDescriptors, warnings: [
+        ...(compiler.native ? [NATIVE_EXPERIMENTAL_WARNING, NATIVE_ONE_CHECKER_WARNING] : []),
+        compiler.native && options.maxOldSpaceMb ? NATIVE_HEAP_WARNING : null,
+        compiler.native ? fileCountWarning(graph.files.size, diagnostics.Files?.value) : null,
+        ...traceWarnings,
         project.parsed.projectReferences?.length ? 'Referenced projects are not built; existing declaration outputs may be required.' : null,
         graph.skipped.length ? `Import analysis skipped ${graph.skipped.length} file${graph.skipped.length === 1 ? '' : 's'} (${graph.skipped.slice(0, 3).map(f => f.file).join(', ')}${graph.skipped.length > 3 ? ', ...' : ''}); import graph findings may be incomplete.` : null,
         compilerErrors.measurementMayBeInvalid ? `${compilerErrors.missingDependencyErrors} of ${compilerErrors.total} compiler errors are unresolved modules or type declarations (${[...moduleErrorCodes].join(', ')}). Dependencies may be missing or not built, so these timings may not represent a healthy build.` : null,
         'Tracing adds overhead. Compare timings using the same compiler, cache mode, and tracing settings.',
-        'Types, Instantiations and Memory counters in diagnostics come from the traced run; tracing inflates them. Do not compare them with plain tsc --extendedDiagnostics output.'
+        compiler.native
+          ? 'Types, Instantiations and Memory counters in diagnostics come from the traced run. We did not measure how tracing changes them in TypeScript 7. Do not compare them with plain tsc --extendedDiagnostics output.'
+          : 'Types, Instantiations and Memory counters in diagnostics come from the traced run; tracing inflates them. Do not compare them with plain tsc --extendedDiagnostics output.'
       ].filter(Boolean) };
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
@@ -427,6 +506,6 @@ export function explain(options) {
   const input = path.resolve(options.project ?? '.');
   const base = fs.existsSync(input) && fs.statSync(input).isDirectory() ? input : path.dirname(input);
   const compiler = loadCompiler(base, options.typescript);
-  const project = readProject(input, compiler.ts);
+  const project = readProject(input, compiler.ts, { native: !!compiler.native });
   return explainFile(buildGraph(compiler.ts, project), options.file, project.base);
 }
