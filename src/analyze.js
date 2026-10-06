@@ -15,15 +15,37 @@ const clean = s => String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
 const display = (base, p) => clean(slash(path.relative(base, p)) || '.');
 const errorSummary = error => clean(String(error?.message ?? error).split('\n')[0].trim().slice(0, 200)) || 'unknown error';
 
+// Resolve an explicit --typescript value to the package's lib/typescript.js.
+function explicitCompilerPath(value) {
+  const target = path.resolve(value);
+  if (!fs.existsSync(target)) throw new Error(`--typescript path not found: ${clean(target)}`);
+  const candidates = fs.statSync(target).isDirectory()
+    ? [path.join(target, 'lib', 'typescript.js'), path.join(target, 'typescript.js')]
+    : [target];
+  const found = candidates.find(file => fs.existsSync(file) && fs.statSync(file).isFile() && path.basename(file) === 'typescript.js');
+  if (!found) {
+    let version;
+    try { version = JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf8')).version; } catch { /* Not a package directory. */ }
+    // TypeScript 7 ships a native compiler and no lib/typescript.js JavaScript API.
+    if (Number(String(version).split('.')[0]) >= 7) throw new Error(`TypeScript ${clean(version)} is unsupported. It ships a native compiler without the JavaScript API (lib/typescript.js) whyts uses. Point --typescript at a TypeScript 5.x or 6.x package.`);
+    throw new Error(`--typescript must be a typescript package directory or its lib/typescript.js: ${clean(target)}`);
+  }
+  return found;
+}
 
-export function loadCompiler(base) {
+export function loadCompiler(base, explicit) {
   let compilerPath;
-  try { compilerPath = createRequire(path.join(base, 'package.json')).resolve('typescript'); }
-  catch { compilerPath = require.resolve('typescript'); }
-  const ts = require(compilerPath);
+  if (explicit) compilerPath = explicitCompilerPath(explicit);
+  else {
+    try { compilerPath = createRequire(path.join(base, 'package.json')).resolve('typescript'); }
+    catch { compilerPath = require.resolve('typescript'); }
+  }
+  let ts;
+  try { ts = require(compilerPath); }
+  catch (error) { throw new Error(`Could not load the TypeScript compiler at ${clean(compilerPath)} (${errorSummary(error)}).`); }
   const major = Number(ts.version?.split('.')[0]);
   if (major < 5 || major >= 7 || !ts.createProgram) {
-    throw new Error(`TypeScript ${ts.version ?? 'unknown'} is unsupported. Use TypeScript 5.x or 6.x; native TypeScript 7 is not supported yet.`);
+    throw new Error(`TypeScript ${ts.version ?? 'unknown'} is unsupported. Use TypeScript 5.x or 6.x; native TypeScript 7 is not supported yet. Point to another compiler with --typescript <path>.`);
   }
   return { ts, compilerPath, tscPath: path.join(path.dirname(compilerPath), 'tsc.js') };
 }
@@ -166,12 +188,41 @@ export function parseDiagnostics(output) {
   return result;
 }
 
-function runCompiler(tscPath, args, cwd, timeoutMs) {
+// Default compiler timeout. The slowest successful traced run measured while preparing 0.4
+// (drizzle-orm type-tests) took 267 s, mostly in the type dump that tsc excludes from Total time.
+export const DEFAULT_TIMEOUT_SECONDS = 900;
+export const PROGRESS_INTERVAL_MS = 30000;
+const nativeCrashSignals = new Set(['SIGABRT', 'SIGSEGV', 'SIGBUS', 'SIGKILL', 'SIGILL']);
+
+// Last non-empty lines of compiler stderr, sanitized and clipped.
+export function stderrTail(text, lines = 8) {
+  return text.split(/\r?\n/).map(l => clean(l.trim()).slice(0, 240)).filter(Boolean).slice(-lines);
+}
+
+export function compilerCrashMessage(signal, stderr, maxOldSpaceMb) {
+  const tail = stderrTail(stderr);
+  const heap = /heap out of memory|Reached heap limit|Allocation failed/i.test(stderr);
+  let message = `Compiler terminated by ${signal}.`;
+  if (heap) message += ' The compiler ran out of JavaScript heap memory.';
+  if (heap || nativeCrashSignals.has(signal)) {
+    message += maxOldSpaceMb
+      ? ` It was already limited to --max-old-space-size ${maxOldSpaceMb}; try a larger value if the machine has the memory.`
+      : ' Retry with --max-old-space-size <MB> (for example 8192) to raise the compiler heap limit.';
+    if (!heap) message += ' SIGABRT/SIGSEGV/SIGKILL without a heap message can also come from the operating system out-of-memory killer or a native crash.';
+  }
+  if (tail.length) message += `\nLast compiler stderr lines:\n${tail.map(l => `  ${l}`).join('\n')}`;
+  return message;
+}
+
+function runCompiler(tscPath, args, cwd, { timeoutMs, maxOldSpaceMb, onProgress, progressIntervalMs = PROGRESS_INTERVAL_MS }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [tscPath, ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+    const nodeArgs = maxOldSpaceMb ? [`--max-old-space-size=${maxOldSpaceMb}`] : [];
+    const child = spawn(process.execPath, [...nodeArgs, tscPath, ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
     let stdout = '', stderr = '', size = 0, failure;
+    const started = performance.now();
     const stop = message => { failure ??= new Error(message); child.kill(); };
-    const timer = setTimeout(() => stop(`Type checking exceeded ${timeoutMs / 1000}s. Increase --timeout.`), timeoutMs);
+    const timer = setTimeout(() => stop(`Type checking exceeded ${timeoutMs / 1000}s. tsc writes a trace type dump after checking that is not part of its reported Total time, so large projects can run much longer than Total time. Increase --timeout.`), timeoutMs);
+    const progress = onProgress ? setInterval(() => onProgress(Math.round((performance.now() - started) / 1000)), progressIntervalMs) : null;
     const cancel = () => stop('Analysis cancelled.');
     process.once('SIGINT', cancel);
     process.once('SIGTERM', cancel);
@@ -183,13 +234,14 @@ function runCompiler(tscPath, args, cwd, timeoutMs) {
     child.stdout.on('data', collect('stdout'));
     child.stderr.on('data', collect('stderr'));
     const cleanup = () => {
-      clearTimeout(timer); process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
+      clearTimeout(timer); if (progress) clearInterval(progress);
+      process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel);
     };
     child.on('error', error => { cleanup(); reject(error); });
     child.on('close', (code, signal) => {
       cleanup();
       if (failure) reject(failure);
-      else if (signal) reject(new Error(`Compiler terminated by ${signal}.`));
+      else if (signal) reject(new Error(compilerCrashMessage(signal, stderr, maxOldSpaceMb)));
       else resolve({ stdout, stderr, exitCode: code });
     });
   });
@@ -288,7 +340,7 @@ export function measuredFindings({ hotspots, projectHotspots, sourceGroups }) {
 export async function analyze(options = {}) {
   const projectInput = path.resolve(options.project ?? '.');
   const compilerBase = fs.existsSync(projectInput) && fs.statSync(projectInput).isDirectory() ? projectInput : path.dirname(projectInput);
-  const compiler = loadCompiler(compilerBase);
+  const compiler = loadCompiler(compilerBase, options.typescript);
   const project = readProject(projectInput, compiler.ts);
   const graph = buildGraph(compiler.ts, project);
   const findings = inspectProject(graph, project);
@@ -299,7 +351,8 @@ export async function analyze(options = {}) {
     const args = ['--project', project.configPath, '--noEmit', '--emitDeclarationOnly', 'false',
       '--incremental', '--tsBuildInfoFile', path.join(temporary, 'cache.tsbuildinfo'),
       '--extendedDiagnostics', '--pretty', 'false', '--generateTrace', temporary];
-    const run = await runCompiler(compiler.tscPath, args, project.base, options.timeoutMs ?? 120000);
+    const run = await runCompiler(compiler.tscPath, args, project.base, {
+      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_SECONDS * 1000, maxOldSpaceMb: options.maxOldSpaceMb, onProgress: options.onProgress, progressIntervalMs: options.progressIntervalMs });
     const wallMilliseconds = performance.now() - started;
     const diagnostics = parseDiagnostics(run.stdout);
     if (!Object.keys(diagnostics).length) throw new Error(`Compiler produced no diagnostics. ${clean((run.stderr || run.stdout).slice(0, 2000))}`);
@@ -325,7 +378,7 @@ export async function analyze(options = {}) {
 export function explain(options) {
   const input = path.resolve(options.project ?? '.');
   const base = fs.existsSync(input) && fs.statSync(input).isDirectory() ? input : path.dirname(input);
-  const compiler = loadCompiler(base);
+  const compiler = loadCompiler(base, options.typescript);
   const project = readProject(input, compiler.ts);
   return explainFile(buildGraph(compiler.ts, project), options.file, project.base);
 }
