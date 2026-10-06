@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import ts from 'typescript';
-import { analyze, readProject, buildGraph, explainFile, inspectProject, parseDiagnostics, traceHotspots, reachable, readTrace } from '../src/analyze.js';
+import { analyze, readProject, buildGraph, explainFile, inspectProject, parseDiagnostics, traceHotspots, reachable, readTrace, measuredFindings, CHAIN_COVERAGE_THRESHOLD } from '../src/analyze.js';
 import { renderReport } from '../src/report.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -149,4 +149,21 @@ test('trace parse failures put the error message in the warning', async t => {
   assert.match(result.warnings[0], /^Trace could not be parsed \(.+\)\. Other diagnostics remain available\.$/);
   assert.match(result.warnings[0], /JSON/);
   assert.ok(!/[\n\u0000-\u001f]/.test(result.warnings[0]));
+});
+
+test('check-hotspot is skipped when one chain covers at least 80 percent of the file time', () => {
+  const group = (file, milliseconds) => ({ file, line: 1, character: 1, milliseconds, memberCount: 1, comparisons: [] });
+  const file = (name, milliseconds) => ({ file: name, milliseconds });
+  const rules = (files, groups) => measuredFindings({ hotspots: files, projectHotspots: files, sourceGroups: groups })
+    .map(f => `${f.rule}:${f.evidence.file}`);
+  // 80/100 is exactly at the threshold: the chain explains the file, so only the chain is reported.
+  assert.deepEqual(rules([file('a.ts', 100)], [group('a.ts', 80)]), ['source-check-chain:a.ts']);
+  assert.equal(CHAIN_COVERAGE_THRESHOLD, 0.8);
+  // Below the threshold both findings remain.
+  assert.deepEqual(rules([file('a.ts', 100)], [group('a.ts', 79)]), ['source-check-chain:a.ts', 'check-hotspot:a.ts']);
+  // Two chains that each cover less than 80 percent do not suppress the file finding.
+  assert.deepEqual(rules([file('a.ts', 200)], [group('a.ts', 100), group('a.ts', 60)]),
+    ['source-check-chain:a.ts', 'source-check-chain:a.ts', 'check-hotspot:a.ts']);
+  // A chain in another file never suppresses this file.
+  assert.deepEqual(rules([file('a.ts', 100)], [group('b.ts', 100)]), ['source-check-chain:b.ts', 'check-hotspot:a.ts']);
 });

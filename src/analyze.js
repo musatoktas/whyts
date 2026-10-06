@@ -241,6 +241,9 @@ export function inspectProject(graph, project) {
 
 const errorSummary = error => clean(String(error?.message ?? error).split('\n')[0].trim().slice(0, 200)) || 'unknown error';
 
+// A file whose recorded check time is mostly covered by one chain is already explained by that chain.
+export const CHAIN_COVERAGE_THRESHOLD = 0.8;
+
 export async function readTrace(traceFile, temporary, project, graph) {
   const result = { hotspots: [], sourceHotspots: [], sourceGroups: [], typeHotspots: [], projectHotspots: [], typeDescriptors: null, warnings: [] };
   if (!fs.existsSync(traceFile)) result.warnings.push('Compiler did not emit a trace; no hotspot measurements are available.');
@@ -264,8 +267,9 @@ export function measuredFindings({ hotspots, projectHotspots, sourceGroups }) {
       ? 'Inspect the focus expression, related checks and listed type declarations. Comparisons were recorded inside this chain; inclusive samples do not prove a cause or predict savings. Validate behavior and remeasure any change.'
       : 'Inspect the focus expression and related checks. No type comparison was recorded inside this sampled chain; the trace does not establish the expensive type. Validate behavior and remeasure any change.'
   });
+  const coveredByChain = file => sourceGroups.some(g => g.file === file.file && g.milliseconds >= file.milliseconds * CHAIN_COVERAGE_THRESHOLD);
   const filesToReview = [...projectHotspots, ...hotspots.filter(h => !projectHotspots.some(p => p.file === h.file))].slice(0, 5);
-  for (const hotspot of filesToReview.filter(h => h.milliseconds >= 100)) findings.push({
+  for (const hotspot of filesToReview.filter(h => h.milliseconds >= 100 && !coveredByChain(h))) findings.push({
     rule: 'check-hotspot', confidence: 'measured', title: `${hotspot.file}: ${hotspot.milliseconds.toFixed(1)} ms recorded check intervals`,
     evidence: hotspot, suggestion: 'Inspect types and declarations in this file. Trace intervals are inclusive samples, not a complete attribution of total check time.'
   });
