@@ -1,3 +1,128 @@
+# v0.7.0 validation
+
+Done on 2026-10-07 (Dubai time), from about 11:30 to 12:45, with Node.js 24.21.0 on Linux x64. The bench has 16 cores. Other jobs ran on it all the time. The load average was between 40 and 96 during part of the runs. All the times below are traced times. They are upper bounds and not benchmarks. This release makes no speed claim. Output files are on the bench in `/opt/whyts-v07-out`.
+
+## What this release checks
+
+0.7 adds two diagnoses with a remedy: recursive type instantiation and variance computation. It also changes the default terminal output. Each diagnosis was first seen in a real project:
+
+1. TanStack Form issue 1474 (form-core commit 2216fde): `DeepKeys<{ name: string; data: JsonData }>`, where `JsonData` contains itself. TS2589, 5,001,167 instantiations.
+2. drizzle-orm commit 15454db with TypeScript 5.6.3: the `getVariancesWorker` events for five dialects, 405 ms to 473 ms each.
+
+## Trace events in each compiler
+
+We looked at the trace of each compiler before we wrote the code.
+
+| Event | 5.6.3 | 5.9.3 | 6.0.3 | 7.0.2 (`--checkers 1`) |
+| --- | --- | --- | --- | --- |
+| `instantiateType_DepthLimit` (`typeId`, `instantiationDepth`, `instantiationCount`) | not in the drizzle-orm trace (no TS2589 there) | present, 402,173 events for the repro | present, 402,173 events | present, 402,176 events, plus `checkerId` |
+| `getVariancesWorker` (`id`, `arity`) | present (165 events in drizzle-orm) | present | present (43 events in tRPC server) | present as begin and end events, and the variances are on the end event |
+
+- One compiler hit of the limit writes hundreds of thousands of events. whyts counts them for each type id and keeps three type ids.
+- The events name type parameters, for example `T`, `TAllKeys`, `TParent`. whyts goes from the declaration of a type parameter to the type alias that owns it. The `types.json` of 5.9.3 has no alias name for these types.
+- The TS2589 error line gives the place (`k.ts(4,17)`). TypeScript 5.9.3, 6.0.3 and 7.0.2 print the same line.
+- The native `types_0.json` has the same fields. Its declaration paths are in lower case.
+
+## Example 1: recursive type (TanStack Form issue 1474)
+
+Project: the repro from the issue, `DeepKeys<Values>` with `util-types.ts` of commit 2216fde. Compiler: TypeScript 5.9.3.
+
+Before (0.6.0, whole report, shortened):
+
+```text
+Error codes: TS2589 x1
+   k.ts:4:17  TS2589  Type instantiation is excessively deep and possibly infinite.
+1. [measured] k.ts: 10582.2 ms recorded check intervals
+   at most 99.6% of Check time
+   Inspect types and declarations in this file.
+```
+
+After (0.7.0, default output):
+
+```text
+1. [measured] Recursive type instantiation: DeepKeys<Values>
+   Where: k.ts:4:17
+   It hit the instantiation limit inside DeepKeysAndValuesImpl (../src/util-types.ts:151).
+   DeepKeysAndValuesImpl refers to itself: DeepKeysAndValuesImpl -> DeepKeyAndValueArray -> DeepKeysAndValuesImpl.
+   Type argument JsonData (k.ts:2): JsonData refers to itself.
+   Fix: Stop the expansion of DeepKeysAndValuesImpl when it meets a type it already visited. Or add a depth limit to it.
+   Cost: 10875.5 ms, at most 99.4% of Check time (upper bound, not a saving)
+```
+
+The same diagnosis came out of the real runs with TypeScript 6.0.3 (10564.7 ms, 99.6%) and 7.0.2 (55076.7 ms, 99.9%, one checker). The TypeScript 7 time is much larger because of the trace of 402,176 events. We did not investigate the difference.
+
+## Example 2: variance computation (drizzle-orm 15454db)
+
+Project: `drizzle-orm/tsconfig.json`, TypeScript 5.6.3, 1627 files, 6 compiler errors (TS2305 and TS7006, as in 0.4).
+
+Before (0.6.0): the first finding was `db.ts:147:10`, 487.9 ms, with the comparison `SingleStoreSession` to `SingleStoreSession`. The report did not say that variance was the cost.
+
+After (0.7.0, default output, run 2):
+
+```text
+1. [measured] Variance computation for 9 generic types, led by GelSelectBuilder
+   Where: src/gel-core/query-builders/select.ts:60:1
+   TypeScript spent 2705.4 ms to compute how GelSelectBuilder, SQLiteSession, SingleStoreSession and others relate when type arguments differ.
+   Fix: Reduce the type parameters of GelSelectBuilder and SQLiteSession. Simplify their return types. An in or out annotation is not a guaranteed fix. Measure again after each change.
+   Cost: 2705.4 ms, at most 36.7% of Check time (upper bound, not a saving)
+```
+
+- Run 1 of 0.7 gave 2535.1 ms and 36.9% with `SQLiteSession` first. The lead type changes between runs because five types are within 10% of each other. The count of 9 types and the union time are stable.
+- `--verbose` lists the five largest outer types with their nested types, for example `SingleStoreSession` 469.3 ms with `SingleStoreTransaction`, `SingleStoreSelectBuilder` and `CreateSingleStoreSelectFromBuilderMode`.
+- The chains of 0.6 at `db.ts:147` and `query.ts:45` are not listed again in the compact report, because their comparisons name types of this list.
+- The remedy does not promise a result. We know from earlier work on drizzle-orm that `in` and `out` annotations on `SingleStoreSession` gave no measurable change. That work is not part of this release. We did not run it again, and we did not test any remedy here.
+
+## False-positive check
+
+| Project | Compiler | Result |
+| --- | --- | --- |
+| TanStack Form `form-core`, fixed branch (commit 4fa8090), 501 files | 5.9.3 | 0 diagnoses |
+| The repro with the fixed `util-types.ts` | 5.9.3 | 0 diagnoses. Check time 0.06 s |
+| tRPC `packages/server` (main at d756e59), 942 files | 7.0.2 and 6.0.3 | 0 diagnoses |
+
+- The first tRPC run with 7.0.2 gave one variance diagnosis. It was for `FastifyInstance`, a type of the `fastify` package: 134.5 ms, 26.8% of a Check time of 0.50 s. The project cannot change that type. We added a rule: only types declared in the project get a variance diagnosis. After that change, tRPC gave 0 diagnoses with both compilers.
+- The compact report of tRPC still lists one or two slow checks without a known pattern (`fastifyTRPCPlugin.ts:66:3`: 143.5 ms, 29.8% with 7.0.2). These are the measured chains of earlier versions. They have no remedy.
+- Other test projects of the earlier versions (zod, router-core, typespec, playwright, mbd-v3) were not run again with 0.7.
+
+## Tests
+
+- The syntax check passed for all source modules. The new module is `src/diagnose.js`.
+- Version 0.6.0 had 72 tests. This release has 90. The 18 new tests are in `test/diagnose.test.js`.
+- Results of `node --test`, run with a clean `TMPDIR`:
+
+| Bundled TypeScript | Without `WHYTS_TS7` | With `WHYTS_TS7` (typescript@7.0.2) |
+| --- | --- | --- |
+| 5.9.3 | 89 passed, 1 skipped | 90 passed |
+| 6.0.3 (`npm install --no-save typescript@6.0.3`) | 89 passed, 1 skipped | not run |
+
+- We changed 11 lines of existing tests: ten calls of `renderReport` now pass `{ verbose: true }`, because they check the full report, and one expected object of `parseCompilerErrors` has the new field `excessiveDepth`. No assertion was removed or weakened.
+- The new tests use trimmed real traces: the repro with 5.9.3, 6.0.3 and 7.0.2, drizzle-orm variance events (5.6.3), and TypeScript 7 begin and end variance events. `util-types.ts.txt` is the file of TanStack Form commit 2216fde (MIT). The tests cover:
+  - the alias, the cycle, the self-referencing type argument and the place for the three compilers,
+  - the counts of limit events for each type id,
+  - the TS2589 sites, also beyond the first five errors,
+  - no diagnosis without an error and without limit events, and no cycle claim for an alias that does not refer to itself,
+  - outer and nested variance events, the union time, the share of Check time, and the TypeScript 7 begin and end events,
+  - no variance diagnosis below 50 ms and none for a type outside the project,
+  - at most 20 words in each sentence of every remedy,
+  - the compact output (three items, one summary line, the 3% rule, no list of a chain that a diagnosis explains), `--verbose`, reports without `diagnoses`, and the CLI in compact and full mode.
+- We changed the sources one way at a time in a copy and ran `test/diagnose.test.js`. Each of the 9 changes turned at least one test red, and the unmodified copy passed all 18 tests. The changes: no scope filter, no counting of limit events, no cycle search, no name filter for trace spans, a limit of 4 items, no collection of TS2589 sites, no signal check, no end-event arguments, and no total-time threshold. The last change is red because the code then fails on an empty list, so it does not show the threshold alone.
+
+## Not verified
+
+- We did not measure any remedy on a project. The reports say what the trace shows, and they name a direction.
+- We did not run 0.7 on the full set of projects of the earlier versions. The only projects run with 0.7 are in this section.
+- The syntax-based search for cycles matches type names. It can miss a cycle through names that exist twice in the program. It can also show a cycle that the compiler does not follow.
+- The variance remedy is the same for each variance diagnosis. We know of no case where the `in` and `out` annotation has a measurable effect.
+- The CI result of the pull request is not part of this record.
+
+## Candidate patterns, not added
+
+We found no real project that shows these patterns, so they have no remedy in 0.7:
+
+- A comparison of a large union. The saved reports of the test set (0.3.1 to 0.4 JSON files) have no comparison of 100 ms or more with a union of 50 or more members, or an intersection of 4 or more members.
+- An intersection that an interface could replace.
+- A deep conditional type. The saved react-router report has three comparisons of 100 ms or more with a conditional type. We did not look at their source.
+
 # v0.6.0 validation
 
 Done on 2026-10-07 (Dubai time) with Node.js 24.21.0 on Linux x64. The machine has 16 cores. Another job used about two cores during the series. Series ran from 08:05 to 09:18, and the other experiments ran at 08:04 and from 09:20 to 09:40. All output files are on the bench in `/opt/whyts-v06-out`.

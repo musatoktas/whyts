@@ -7,7 +7,7 @@
 
 **Find out why your TypeScript project is slow.**
 
-A small CLI that turns compiler diagnostics, traces, and import relationships into evidence you can act on. No account, API key, or LLM required.
+A small CLI that turns compiler diagnostics, traces, and import relationships into evidence you can act on. It says where the check is slow, and for two known patterns it also says why and what to do. No account, API key, or LLM required.
 
 ![whyts terminal report](docs/demo.svg)
 
@@ -19,7 +19,7 @@ Requires Node.js 20+ and a TypeScript project with dependencies installed.
 npx whyts --project .
 ```
 
-For repeatable runs, pin a version: `npx whyts@0.6.0 --project .`
+For repeatable runs, pin a version: `npx whyts@0.7.0 --project .`
 
 To run from a checkout:
 
@@ -30,6 +30,42 @@ npm ci --ignore-scripts
 npm run demo
 node src/cli.js --project /path/to/your/tsconfig.json
 ```
+
+## Diagnoses and remedies
+
+By default, whyts prints at most three actions and one summary line. Each action has a pattern, a location, a short remedy and a link. The image above is a recorded run. Use `--verbose` for the full report.
+
+```text
+whyts 0.7.0 · TypeScript 5.9.3 · repro-project/tsconfig.json
+
+1. [measured] Recursive type instantiation: DeepKeys<Values>
+   Where: k.ts:4:17
+   TS2589 at this place: Type instantiation is excessively deep and possibly infinite.
+   It hit the instantiation limit inside DeepKeysAndValuesImpl (../src/util-types.ts:151).
+   DeepKeysAndValuesImpl refers to itself: DeepKeysAndValuesImpl -> DeepKeyAndValueArray -> DeepKeysAndValuesImpl.
+   Type argument JsonData (k.ts:2): JsonData refers to itself.
+   Fix: Stop the expansion of DeepKeysAndValuesImpl when it meets a type it already visited. Or add a depth limit to it. Check that the fix keeps the same results.
+   Cost: 10875.5 ms, at most 99.4% of Check time (upper bound, not a saving)
+   Docs: https://github.com/microsoft/TypeScript/wiki/Performance
+
+Check 10.94s · Total 11.21s · 65 files · 1 compiler error · 1 finding in the full report. Use --verbose to see them.
+```
+
+Two patterns have a remedy in 0.7. Each one was seen in a real project before it was added.
+
+| Pattern | Trace evidence | Remedy |
+| --- | --- | --- |
+| `recursive-type-instantiation` | A TS2589 error and the `instantiateType_DepthLimit` events. whyts finds the type alias that owns the type parameters at the limit, a reference cycle by name between aliases, and a type argument that refers to itself | Stop the expansion on a type that was visited, or add a depth limit |
+| `variance-computation` | `getVariancesWorker` events with the type id, the number of type parameters and the result. whyts reports the outermost events, the largest nested ones, and their union time | Reduce type parameters, simplify return types. An `in` or `out` annotation is not a guaranteed fix |
+
+Rules:
+
+- A diagnosis is `measured` when the compiler recorded it (the error or the trace events). The name-based walk over type aliases is syntax only: it can miss a cycle that runs through imports it cannot match by name, or through a type that is not a declaration of the program.
+- The variance pattern needs 100 ms of union time in total, and only events of 50 ms or more count. It lists only types declared in the project. A type from a dependency gets no remedy, because the project cannot change it.
+- The cost is the largest recorded interval for the place, shown as at most N% of Check time. It is an upper bound under tracing. It is not a predicted saving.
+- In the compact report, a slow check without a known pattern shows only above 3% of Check time. A check that a diagnosis already explains by type name is not listed twice.
+- The trace events exist in TypeScript 5.9, 6.0 and 7.0 (`instantiateType_DepthLimit`, `getVariancesWorker`). In TypeScript 7 they carry a `checkerId`, and whyts uses one checker, so the type ids stay unique.
+- Remedies are short instructions. They name a direction. whyts did not measure any remedy on your project.
 
 ## What it finds
 
@@ -42,6 +78,8 @@ node src/cli.js --project /path/to/your/tsconfig.json
 | Barrel reach | Reexport count, importers, transitive file reach, reached files already configured as roots | Exclusive check cost, bundler behavior, or guaranteed savings |
 | Slow file checks | Recorded `checkSourceFile` trace intervals | Complete attribution of total time or the exact expensive type |
 | Compiler errors | The first five errors, the error code counts, and a warning when unresolved modules dominate | That the timings are valid when dependencies are missing |
+| Recursive type instantiation | TS2589 location, the type alias at the instantiation limit, name-based reference cycles, self-referencing type arguments | That the listed cycle is the only cause |
+| Variance computation | Outermost `getVariancesWorker` events for project types, nested types, union time | That a variance annotation removes the cost |
 
 Findings are labeled **measured**, **observed**, or **review**. Measured source check chains appear first, with project code prioritized over dependencies. Chain spans below 10 ms and file spans below 100 ms remain in the recorded data without becoming findings. Structural suggestions follow in a separate section. Suggested changes require a fresh measurement and behavior checks. whyts never invents a predicted speedup.
 
@@ -81,6 +119,8 @@ This is a compact explanation, not a complete implementation of `tsc --explainFi
 node src/cli.js --project apps/web/tsconfig.json --json > report.json
 node src/cli.js --project apps/web --timeout 300 --no-color
 ```
+
+Version 0.7 adds the additive field `diagnoses` and does not change the existing fields. Each entry has `pattern`, `title`, `confidence` (`measured`), `location`, `milliseconds`, `checkTimeShareUpperBoundPercent`, `evidence`, `remedy` and `docs`. `evidence` has the `event`, the `typeName`, the `location` and the time, and the pattern fields. `compilerErrors` has the new list `excessiveDepth` with the TS2589 sites. The `--verbose` option changes only the terminal output. The JSON is always complete.
 
 JSON has `schemaVersion`, compiler version, summary, diagnostics with units, findings with evidence, hotspots, and warnings. Version 0.3 adds `sourceGroups` and `typeDescriptors` while preserving schema version 1 and the existing `hotspots`, `projectHotspots`, `sourceHotspots`, and `typeHotspots` meanings. Measured source findings now use rule `source-check-chain` and chain evidence. `sourceGroups` includes `root`, `members`, `memberCount`, inclusive `milliseconds`, and the chosen expression's `focusMilliseconds`. `typeDescriptors` records file/scanned/retained bytes and requested/resolved ID counts. Source/type records include durations in milliseconds; source and declaration locations use one-based `line`/`character`, and source `pos`/`end` are compiler UTF-16 offsets. Progress goes to stderr. Exit codes:
 
@@ -197,6 +237,7 @@ These values come from one traced run for each report. They are samples. A chain
 
 | Option | Meaning |
 | --- | --- |
+| `--verbose` | Print the full report. The default prints at most three actions and one summary line. |
 | `--timeout <seconds>` | Compiler time limit. The default is 900. |
 | `--runs <N>` | Do N untraced runs after the traced run. The report and the JSON show the median, smallest and largest value. The default is 1. See Measure repeatedly. |
 | `--max-old-space-size <MB>` | Set the heap limit of the compiler process. The range is 256 to 1048576. TypeScript 7 ignores it. |
