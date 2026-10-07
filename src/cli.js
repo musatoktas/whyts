@@ -12,6 +12,7 @@ Usage:
   whyts compare --baseline <directory|tsconfig> --candidate <directory|tsconfig> [--runs <N>]
         [--timeout <seconds>] [--max-old-space-size <MB>] [--typescript <path>] [--json]
   whyts compare <baseline.json> <candidate.json> [--json]
+  whyts mcp
 
 Options:
   -p, --project   Project to inspect (default: current directory)
@@ -33,6 +34,9 @@ Options:
   -h, --help     Show help
   -v, --version  Show version
 
+mcp starts a Model Context Protocol server on stdio, so that AI coding agents can call
+analyze, compare and explain as tools. It needs the optional dependencies of whyts.
+
 Paths for explain are relative to the tsconfig directory.
 compare exit codes: 0 when the comparison finished, 1 on a failure, a rejected comparison, or sides that are not comparable (compiler errors that differ between the sides).
 No source edits, network calls, lifecycle scripts, or emitted build outputs.
@@ -41,6 +45,10 @@ the traced run uses one checker, so type ids stay unambiguous).
 `;
 
 function parse(args) {
+  if (args[0] === 'mcp') {
+    if (args.length > 1 && !['-h', '--help'].includes(args[1])) throw new Error('mcp takes no arguments. Use --help.');
+    return args.length > 1 ? { help: true } : { mcp: true };
+  }
   const options = { project: '.', timeoutMs: 900000, json: false, color: !!process.stdout.isTTY && !('NO_COLOR' in process.env) };
   if (args[0] === 'explain') {
     args.shift(); options.file = args.shift();
@@ -92,6 +100,7 @@ try {
   const options = parse(process.argv.slice(2));
   if (options.help) process.stdout.write(help);
   else if (options.version) process.stdout.write(`${toolVersion}\n`);
+  else if (options.mcp) await (await import('./mcp.js')).serve();
   else if (options.compare) {
     let result;
     if (options.files.length) result = compareReports(readReportFile(options.files[0], 'baseline'), readReportFile(options.files[1], 'candidate'));
