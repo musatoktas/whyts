@@ -171,6 +171,7 @@ function verdictText(metric) {
   if (metric.verdict === 'separated') return `RANGES DO NOT OVERLAP: the candidate is ${metric.direction}`;
   if (metric.verdict === 'within-noise') return 'WITHIN NOISE: the ranges overlap';
   if (metric.verdict === 'insufficient-runs') return `NO VERDICT: each side needs at least ${MIN_RUNS_FOR_VERDICT} measured runs`;
+  if (metric.verdict === 'not-comparable') return 'NO VERDICT: the two sides are not comparable';
   return 'NO VERDICT: a timing is missing';
 }
 
@@ -183,9 +184,14 @@ export function renderComparison(result, color = false) {
   if (result.mode === 'live') lines.push(`${result.runs} measured runs per side in the order ${result.order} (A is the baseline). Each side ran once first as a warm-up; the warm-up runs are not in the numbers.`);
   const failed = result.warnings.filter(w => w.startsWith('COMPILER ERRORS'));
   if (failed.length) lines.push('', ...failed.map(w => bold(`WARNING: ${safe(w)}`)));
+  if (result.comparable === false) {
+    const count = side => side.compilerErrors ? `${side.compilerErrors.count}${side.compilerErrors.codes?.length ? ` (${side.compilerErrors.codes.slice(0, 3).map(c => `${safe(c.code)} x${c.count}`).join(', ')})` : ''}` : 'unknown';
+    lines.push('', bold(`NOT COMPARABLE: ${safe(result.reason)}`), `   Compiler errors: baseline ${count(result.baseline)}, candidate ${count(result.candidate)}. The raw times are below. They show no verdict.`);
+  }
   for (const [title, metric] of [['Check time', result.checkTime], ['Total time', result.totalTime]]) {
-    lines.push('', bold(title), `   baseline : ${summaryText(metric.baseline)}`, `   candidate: ${summaryText(metric.candidate)}`,
-      `   difference of medians: ${signed(metric.deltaMilliseconds, ' ms')} (${signed(metric.deltaPercent, '%')})`, `   ${verdictText(metric)}`);
+    lines.push('', bold(title), `   baseline : ${summaryText(metric.baseline)}`, `   candidate: ${summaryText(metric.candidate)}`);
+    if (metric.verdict !== 'not-comparable') lines.push(`   difference of medians: ${signed(metric.deltaMilliseconds, ' ms')} (${signed(metric.deltaPercent, '%')})`);
+    lines.push(`   ${verdictText(metric)}`);
     if (metric.rule.chanceWithoutDifference != null) lines.push(`   Chance that the ranges do not overlap if both sides were the same: ${Number((metric.rule.chanceWithoutDifference * 100).toPrecision(2))}% (assumes independent runs)`);
   }
   if (result.findings) {

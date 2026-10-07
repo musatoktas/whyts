@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { analyze } from '../src/analyze.js';
-import { compareProjects, compareReports, checkCompatibility, diffFindings } from '../src/compare.js';
+import { compareProjects, compareReports, checkCompatibility, diffFindings, judgeComparability } from '../src/compare.js';
 import { renderComparison, renderReport } from '../src/report.js';
 import { median, summarize, runSchedule, judge, separationChance, diffEntries } from '../src/timing.js';
 
@@ -45,6 +45,8 @@ fs.writeFileSync(counter, String(n + 1));
 fs.appendFileSync(process.env.WHYTS_FAKE_LOG, JSON.stringify({ project: path.basename(cwd), args: process.argv.slice(2) }) + '\\n');
 const check = times[n % times.length];
 const exit = process.env['WHYTS_FAKE_EXIT_' + path.basename(cwd).replace(/\\W/g, '_')];
+const errors = process.env['WHYTS_FAKE_ERRORS_' + path.basename(cwd).replace(/\\W/g, '_')];
+if (errors) process.stdout.write(errors.split(';').map(code => 'main.ts(1,1): error ' + code + ': scripted\\n').join(''));
 process.stdout.write('Files: ' + files + '\\nCheck time: ' + check.toFixed(2) + 's\\nTotal time: ' + (check + 0.5).toFixed(2) + 's\\n');
 if (exit) process.exitCode = Number(exit);
 `);
@@ -171,8 +173,79 @@ test('live comparison warns about file counts, compiler errors and different com
   assert.match(warnings, /COMPILER ERRORS: 2 of 2 compiler runs of the candidate/);
   assert.match(warnings, /different compiler options \(strict\)/);
   assert.deepEqual(result.candidate.compilerExitCodes, [2, 2]);
-  assert.equal(result.checkTime.verdict, 'insufficient-runs');
+  // The candidate fails and the baseline does not, so the sides are not comparable.
+  assert.equal(result.comparable, false);
+  assert.equal(result.checkTime.verdict, 'not-comparable');
   assert.match(renderComparison(result), /WARNING: COMPILER ERRORS/);
+});
+
+// The bug of 0.7.0: a baseline that stops early with TS2589 looked like a slower candidate.
+test('live comparison: a baseline with compiler errors against a clean candidate is not comparable', async t => {
+  log(t);
+  const tsc = fakeCompiler(t);
+  const fail = project(t, [0.07, 0.07, 0.08, 0.07, 0.07, 0.06]), clean = project(t, [0.14, 0.14, 0.15, 0.14, 0.14, 0.13]);
+  const name = d => path.basename(d).replace(/\W/g, '_');
+  process.env[`WHYTS_FAKE_EXIT_${name(fail)}`] = '2'; process.env[`WHYTS_FAKE_ERRORS_${name(fail)}`] = 'TS2589;TS2589;TS2322';
+  t.after(() => { delete process.env[`WHYTS_FAKE_EXIT_${name(fail)}`]; delete process.env[`WHYTS_FAKE_ERRORS_${name(fail)}`]; });
+  const result = await compareProjects({ baseline: fail, candidate: clean, runs: 5, typescript: tsc });
+  assert.equal(result.comparable, false);
+  assert.equal(result.reason, 'The baseline stopped with 3 compiler errors (TS2589, TS2322). Timings are not comparable.');
+  assert.equal(result.checkTime.verdict, 'not-comparable');
+  assert.equal(result.totalTime.verdict, 'not-comparable');
+  assert.equal(result.checkTime.direction, null);
+  assert.equal(result.checkTime.deltaPercent, null);
+  assert.equal(result.checkTime.baseline.runs, 5);
+  assert.deepEqual(result.baseline.compilerErrors, { count: 3, codes: [{ code: 'TS2589', count: 2 }, { code: 'TS2322', count: 1 }] });
+  assert.deepEqual(result.candidate.compilerErrors, { count: 0, codes: [] });
+  const text = renderComparison(result);
+  assert.match(text, /NOT COMPARABLE: The baseline stopped with 3 compiler errors/);
+  assert.match(text, /median 0\.07s/);
+  assert.doesNotMatch(text, /RANGES DO NOT OVERLAP|difference of medians/);
+});
+
+test('live comparison: the same compiler errors on both sides keep the timing verdict and the warning', async t => {
+  log(t);
+  const tsc = fakeCompiler(t);
+  const a = project(t, [1, 1, 1.01, 1, 1, 1]), b = project(t, [2, 2, 2.01, 2, 2, 2]);
+  const name = d => path.basename(d).replace(/\W/g, '_');
+  for (const d of [a, b]) { process.env[`WHYTS_FAKE_EXIT_${name(d)}`] = '2'; process.env[`WHYTS_FAKE_ERRORS_${name(d)}`] = 'TS2589'; }
+  t.after(() => { for (const d of [a, b]) { delete process.env[`WHYTS_FAKE_EXIT_${name(d)}`]; delete process.env[`WHYTS_FAKE_ERRORS_${name(d)}`]; } });
+  const result = await compareProjects({ baseline: a, candidate: b, runs: 5, typescript: tsc });
+  assert.equal(result.comparable, true);
+  assert.equal(result.reason, null);
+  assert.equal(result.checkTime.verdict, 'separated');
+  assert.equal(result.checkTime.direction, 'slower');
+  assert.match(result.warnings.join('\n'), /COMPILER ERRORS: 5 of 5 compiler runs of the baseline/);
+  assert.match(renderComparison(result), /WARNING: COMPILER ERRORS[\s\S]*RANGES DO NOT OVERLAP/);
+  assert.doesNotMatch(renderComparison(result), /NOT COMPARABLE/);
+});
+
+test('live comparison: two clean sides keep the timing verdict', async t => {
+  log(t);
+  const tsc = fakeCompiler(t);
+  const a = project(t, [1, 1, 1.01, 1, 1, 1]), b = project(t, [2, 2, 2.01, 2, 2, 2]);
+  const result = await compareProjects({ baseline: a, candidate: b, runs: 5, typescript: tsc });
+  assert.equal(result.comparable, true);
+  assert.equal(result.reason, null);
+  assert.equal(result.checkTime.verdict, 'separated');
+  assert.deepEqual(result.baseline.compilerErrors, { count: 0, codes: [] });
+});
+
+test('offline comparison: the same rule applies to two JSON reports', () => {
+  const failing = (total, codes) => report({ timings: { ...report().timings, compilerExitCodes: [2, 2, 2] }, compilerErrors: { total, codes } });
+  const ts2589 = [{ code: 'TS2589', count: 3 }];
+  const result = compareReports(failing(3, ts2589), report());
+  assert.equal(result.comparable, false);
+  assert.match(result.reason, /^The baseline stopped with 3 compiler errors \(TS2589\)/);
+  assert.equal(result.checkTime.verdict, 'not-comparable');
+  const same = compareReports(failing(3, ts2589), failing(3, ts2589));
+  assert.equal(same.comparable, true);
+  assert.match(same.warnings.join('\n'), /COMPILER ERRORS/);
+  assert.equal(compareReports(failing(3, ts2589), failing(2, ts2589)).comparable, false);
+  // A single traced run uses summary.compilerExitCode.
+  const traced = report({ timings: undefined, summary: { programFiles: 100, compilerExitCode: 2 }, compilerErrors: { total: 2, codes: [{ code: 'TS2322', count: 2 }] } });
+  assert.equal(compareReports(traced, report({ timings: undefined })).comparable, false);
+  assert.equal(compareReports(report(), report()).comparable, true);
 });
 
 test('a live comparison between a native and a JavaScript compiler is rejected before any run', async t => {
@@ -207,6 +280,24 @@ test('compatibility: errors for compiler kind, checkers, timing mode and flags; 
   assert.match(warned, /COMPILER ERRORS: 1 of 2 compiler runs of the candidate/);
   // Reports from one whyts version do not warn about the version.
   assert.equal(checkCompatibility(side({ toolVersion: '0.6.0' }), side({ toolVersion: '0.6.0' })).warnings.length, 0);
+});
+
+test('comparability: errors on one side, the same errors, different errors, no errors', () => {
+  const side = extra => ({ exitCodes: [0, 0, 0], errors: { count: 0, codes: [] }, ...extra });
+  const failing = (count, codes) => side({ exitCodes: [2, 2, 2], errors: { count, codes } });
+  const ts2589 = [{ code: 'TS2589', count: 3 }];
+  assert.deepEqual(judgeComparability(side(), side()), { comparable: true, reason: null });
+  assert.equal(judgeComparability(failing(3, ts2589), failing(3, ts2589)).comparable, true);
+  assert.equal(judgeComparability(failing(3, ts2589), failing(3, [{ code: 'TS2322', count: 3 }])).comparable, false);
+  assert.equal(judgeComparability(failing(3, ts2589), failing(4, ts2589)).comparable, false);
+  assert.match(judgeComparability(failing(3, ts2589), failing(1, [{ code: 'TS2322', count: 1 }])).reason, /different compiler errors \(baseline: 3 compiler errors \(TS2589\); candidate: 1 compiler error \(TS2322\)\)/);
+  assert.equal(judgeComparability(failing(1, ts2589), side()).reason, 'The baseline stopped with 1 compiler error (TS2589). Timings are not comparable.');
+  assert.match(judgeComparability(side(), failing(2, [])).reason, /^The candidate stopped with 2 compiler errors\. /);
+  // One failing run among clean runs makes the side a failing side.
+  assert.equal(judgeComparability(side({ exitCodes: [0, 2, 0] }), side()).comparable, false);
+  // Without error data on a failing side, a clean other side still decides. Two failing sides without data stay comparable.
+  assert.equal(judgeComparability(side({ exitCodes: [2], errors: null }), side()).comparable, false);
+  assert.equal(judgeComparability(side({ exitCodes: [2], errors: null }), side({ exitCodes: [2], errors: null })).comparable, true);
 });
 
 // ---- Offline: whyts JSON reports ----
@@ -294,10 +385,24 @@ test('compare CLI: JSON output, text output, exit codes and argument errors', t 
   const text = run(['compare', a, b, '--no-color']);
   assert.equal(text.status, 0);
   assert.match(text.stdout, /whyts compare \(offline\)[\s\S]*Check time[\s\S]*WITHIN NOISE/);
-  // A side with compiler errors still completes with exit 0 and a visible warning.
-  const failed = run(['compare', a, write('f.json', report({ timings: { ...report().timings, compilerExitCodes: [2, 2, 2] } })), '--no-color']);
-  assert.equal(failed.status, 0);
+  assert.equal(result.comparable, true);
+  assert.equal(result.reason, null);
+  // A side with compiler errors and a clean side: the result prints, shows the raw times and exits 1.
+  const failedFile = write('f.json', report({ timings: { ...report().timings, compilerExitCodes: [2, 2, 2] }, compilerErrors: { total: 3, codes: [{ code: 'TS2589', count: 3 }] } }));
+  const failed = run(['compare', failedFile, a, '--no-color']);
+  assert.equal(failed.status, 1);
   assert.match(failed.stdout, /WARNING: COMPILER ERRORS/);
+  assert.match(failed.stdout, /NOT COMPARABLE: The baseline stopped with 3 compiler errors \(TS2589\)\. Timings are not comparable\./);
+  assert.match(failed.stdout, /baseline : median 1\.1s/);
+  assert.doesNotMatch(failed.stdout, /difference of medians|RANGES DO NOT OVERLAP/);
+  const failedJson = JSON.parse(run(['compare', failedFile, a, '--json']).stdout);
+  assert.equal(failedJson.comparable, false);
+  assert.equal(failedJson.checkTime.verdict, 'not-comparable');
+  // The same errors on both sides keep the comparison and exit 0.
+  const same = run(['compare', failedFile, failedFile, '--no-color']);
+  assert.equal(same.status, 0);
+  assert.match(same.stdout, /WARNING: COMPILER ERRORS/);
+  assert.doesNotMatch(same.stdout, /NOT COMPARABLE/);
   assert.equal(run(['compare', a, write('n.json', report({ compiler: 'native', checkers: 1 }))]).status, 1);
   assert.match(run(['compare', a, write('bad.json', '{ nope')]).stderr, /not valid JSON/);
   assert.match(run(['compare', a, path.join(dir, 'missing.json')]).stderr, /Cannot read the candidate report/);
