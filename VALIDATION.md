@@ -105,7 +105,7 @@ The `compare` over stdio with the scripted compiler (a fast candidate, and a can
 - The first start of `npx -p` on a machine with an empty cache was run on the bench only (a new cache directory, a fast network). We did not time it or try a slow network.
 - We did not run a multi-minute project through the server, and we did not run a native TypeScript 7 project through the MCP tools. The server tests use the 5.9.3 and 6.0.3 compilers and a fake compiler.
 - We measured the result size in characters (at most 12,000), not in tokens.
-- CI: see the pull request. The first version of this change passed all 11 jobs with the packages as optional dependencies. CI for the change to `npx -p` is recorded in the pull request text.
+- CI: after the change to `npx -p`, all 11 jobs passed (9 matrix jobs on Linux, Windows and macOS with Node.js 20, 22 and 24, plus TypeScript 6 and 7). The Linux and macOS jobs ran 120 tests with 119 passed and 1 skipped. The Windows job skipped 4 tests: we did not check which 3 more tests skip there, but the MCP server tests are not skipped when the packages are installed, and we did not read the Windows log for them.
 
 # v0.7.1 validation
 
