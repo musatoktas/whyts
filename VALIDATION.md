@@ -2,7 +2,7 @@
 
 0.8.1 adds the package `whyts-mcp` and the MCP Registry file `server.json`. It changes no analysis. `whyts` and `whyts-mcp` both have the version 0.8.1.
 
-Done on 2026-10-07 (Dubai time), ending at about 22:28, with Node.js 24.21.0 on Linux x64, on the bench. The logs are in `/opt/whyts-v081-out` on the bench. Nothing was published to npm or to the MCP Registry.
+Measured on 2026-10-07 (Dubai time, about 22:35 to 22:40) in GitHub Actions on pull request 14: the workflows `ci.yml` and `validate-0.8.1.yml` (Linux, Node.js 24). Nothing ran on a personal machine or on the bench for this section. Nothing was published to npm or to the MCP Registry.
 
 ## Why a second package
 
@@ -14,27 +14,27 @@ Layout: `packages/whyts-mcp/` is a plain directory in the repository, with no wo
 
 | Check | Result |
 | --- | --- |
-| Tests, TypeScript 5.9.3 | 120 tests, 119 passed, 1 skipped (the real TypeScript 7 test) |
-| Tests, TypeScript 5.9.3 with `WHYTS_TS7` (7.0.2) | 120 tests, 120 passed |
-| Tests, TypeScript 6.0.3 with `WHYTS_TS7` (7.0.2) | 120 tests, 120 passed |
-| `whyts-0.8.1.tgz` | 57,961 bytes (58.0 kB) |
-| `whyts-mcp-0.8.1.tgz` | 1,878 bytes, 4 files |
+| `npm test` on Linux and macOS, Node 24 | 120 tests, 119 passed, 1 skipped (the real TypeScript 7 test) |
+| `npm test` on Windows, Node 24 | 120 tests, 116 passed, 4 skipped |
+| Jobs `typescript-6` (6.0.3) and `typescript-7` (7.0.2, `WHYTS_TS7`) | passed (counts not read) |
+| `whyts-0.8.1.tgz` | 57,961 bytes |
+| `whyts-mcp-0.8.1.tgz` | 1,878 bytes |
 | `npm install` of the `whyts` tarball | 2 packages, 23,684 KB |
 | `npm install whyts@0.8.0` (from the registry, same run) | 2 packages, 23,680 KB |
 | `npm install` of both tarballs (`whyts-mcp` and `whyts`) | 6 packages, 39,972 KB |
 
 - The install of `whyts` alone keeps 2 packages. The size rises by 4 KB.
-- Smoke test (`scripts/smoke-whyts-mcp.mjs`): both tarballs were installed in an empty directory, the bin `whyts-mcp` was started, and `initialize` and `tools/list` were answered. Result: server `whyts` 0.8.1 with the tools `analyze`, `compare`, `explain`.
-- MCP Inspector `@modelcontextprotocol/inspector` 2.9.0 (`--cli`): `--method tools/list` returned the three tools. `tools/call` of `analyze` on `examples/type-comparison` returned a result with `toolVersion` 0.8.1, 58 files, no errors and one measured finding (`client.ts:16:14`, 27.1 ms in a traced run).
+- Smoke test (`scripts/smoke-whyts-mcp.mjs`): both tarballs were installed in an empty directory, the bin `whyts-mcp` was started, and `initialize` and `tools/list` were answered. Result: server `whyts` 0.8.1 with the tools `analyze`, `compare`, `explain`. The step is part of `ci.yml`, so it ran in all nine OS and Node jobs.
+- MCP Inspector `@modelcontextprotocol/inspector` 2.9.0 (`--cli`): `--method tools/list` returned the three tools. `tools/call` of `analyze` on `examples/type-comparison` returned a result with `toolVersion` 0.8.1, 58 files, no errors and one measured finding (`client.ts:16:14`, 32.8 ms in a traced run).
 - The alternative command (`npx -y -p <whyts tarball> -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp`) answered `initialize` with the server `whyts` 0.8.1.
 - `mcp-publisher` 1.8.1 `validate` on `server.json`: `server.json is valid`. We did not run `login` or `publish`.
 - The test of the missing MCP packages now expects the message `npx -y whyts-mcp`.
+- The workflow `validate-0.8.1.yml` holds the one-time measurements. Delete it when you no longer need them.
 
 ## Facts from the documentation
 
 - The npm documentation on trusted publishing says that a new trusted publisher "must complete its first successful publish within 2 days", and that it needs npm 11.5.1 or newer. It does not say that you can set it up before the package exists. For this reason the first publish of `whyts-mcp` is done by hand (see `docs/releasing.md`).
 - The MCP Registry GitHub Actions page uses `permissions: id-token: write, contents: read`, the `mcp-publisher` binary from the latest release, `./mcp-publisher login github-oidc` and `./mcp-publisher publish`. The workflow `mcp-registry.yml` uses these.
-- The CI results of this release are not in this file. Read them on the pull request.
 
 # v0.8.0 validation
 
