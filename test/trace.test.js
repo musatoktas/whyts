@@ -239,7 +239,7 @@ test('real compiler example keeps measured findings ahead of heuristics and reso
   }
   assert.deepEqual(report.findings.map(f => f.confidence), [...report.findings.map(f => f.confidence)].sort((a, b) =>
     ['measured', 'observed', 'review'].indexOf(a) - ['measured', 'observed', 'review'].indexOf(b)));
-  assert.match(renderReport(report), /Largest recorded project file-check intervals/);
+  assert.match(renderReport(report, false, { verbose: true }), /Largest recorded project file-check intervals/);
 });
 
 test('terminal report puts source evidence before structure and sanitizes snippets and labels', t => {
@@ -251,7 +251,7 @@ test('terminal report puts source evidence before structure and sanitizes snippe
   const report = { typescriptVersion: '5.9.3', project: 'tsconfig.json', summary: { programFiles: 1, compilerExitCode: 0 },
     diagnostics: {}, findings: [{ confidence: 'review', title: 'Broad inclusion', evidence: {}, suggestion: 'Review' },
       { confidence: 'measured', title: 'main.ts:4:7', evidence, suggestion: 'Inspect' }], ...details, warnings: [] };
-  const text = renderReport(report);
+  const text = renderReport(report, false, { verbose: true });
   assert.ok(text.indexOf('main.ts:4:7') < text.indexOf('Project structure'));
   assert.ok(text.indexOf('Project structure') < text.indexOf('Broad inclusion'));
   assert.match(text, /source: \?\[2JSource/);

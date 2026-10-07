@@ -334,7 +334,7 @@ test('--runs adds untraced timing runs after the traced run and records them und
   assert.equal(result.timings.checkers, null);
   // The traced run keeps its own diagnostics.
   assert.equal(result.diagnostics['Check time'].value, 4);
-  assert.match(renderReport(result), /Untraced timing, 3 runs[\s\S]*Check time: median 1.1s, min 1s, max 1.2s, spread 18.2%/);
+  assert.match(renderReport(result, false, { verbose: true }), /Untraced timing, 3 runs[\s\S]*Check time: median 1.1s, min 1s, max 1.2s, spread 18.2%/);
 });
 
 test('without --runs, or with --runs 1, the report has no timings and the compiler runs once', async t => {

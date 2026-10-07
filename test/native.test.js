@@ -162,7 +162,7 @@ test('native replay: BOM, CRLF and multibyte positions, lowercased declaration p
   const declarations = report.sourceGroups.flatMap(g => g.comparisons).map(c => c.source.declaration)
     .map(d => `${d.file}:${d.line}:${d.character}:${d.scope}`).sort();
   assert.deepEqual(declarations, ['Src/Upper.ts:8:1:project', 'b.ts:9:1:project', 'c.ts:9:1:project', 'e.ts:8:39:project']);
-  const text = renderReport(report);
+  const text = renderReport(report, false, { verbose: true });
   assert.match(text, /TypeScript 7\.0\.2 \(native, EXPERIMENTAL\)/);
   assert.match(text, /Note: Check time was measured with one checker/);
   assert.doesNotMatch(text, /null|undefined|NaN/);

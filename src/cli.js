@@ -7,7 +7,7 @@ const help = `whyts: find out why your TypeScript project is slow.
 
 Usage:
   whyts [--project <directory|tsconfig>] [--json] [--timeout <seconds>]
-        [--max-old-space-size <MB>] [--typescript <path>] [--runs <N>]
+        [--max-old-space-size <MB>] [--typescript <path>] [--runs <N>] [--verbose]
   whyts explain <file> [--project <directory|tsconfig>] [--typescript <path>] [--json]
   whyts compare --baseline <directory|tsconfig> --candidate <directory|tsconfig> [--runs <N>]
         [--timeout <seconds>] [--max-old-space-size <MB>] [--typescript <path>] [--json]
@@ -28,6 +28,7 @@ Options:
                   default is 5 measured runs per side.
       --baseline, --candidate
                   The two projects for a live comparison (compare only)
+      --verbose   Print the full report. The default prints at most three actions.
       --no-color  Disable ANSI styling
   -h, --help     Show help
   -v, --version  Show version
@@ -54,6 +55,7 @@ function parse(args) {
     if (['-v', '--version'].includes(arg)) return { version: true };
     if (arg === '--json') options.json = true;
     else if (arg === '--no-color') options.color = false;
+    else if (arg === '--verbose') options.verbose = true;
     else if (['-p', '--project', '--timeout', '--max-old-space-size', '--typescript', '--runs', '--baseline', '--candidate'].includes(arg)) {
       const value = args.shift();
       if (!value || value.startsWith('-')) throw new Error(`${arg} requires a value.`);
@@ -105,7 +107,7 @@ try {
     if (!options.file) options.onProgress = seconds => process.stderr.write(`whyts: compiler still running after ${seconds}s (timeout ${options.timeoutMs / 1000}s). Large projects can spend minutes writing the trace type dump.\n`);
     const result = options.file ? explain(options) : await analyze(options);
     process.stdout.write(options.json ? JSON.stringify(result, null, 2) + '\n' :
-      options.file ? renderExplanation(result) : renderReport(result, options.color));
+      options.file ? renderExplanation(result) : renderReport(result, options.color, { verbose: !!options.verbose }));
     if (!options.file && result.summary.compilerExitCode !== 0) process.exitCode = 2;
   }
 } catch (error) {

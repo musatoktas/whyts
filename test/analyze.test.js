@@ -107,7 +107,7 @@ test('real traced check produces measurements without changing project files or 
   assert.ok(report.hotspots.some(h => h.file === 'main.ts'));
   assert.deepEqual(fs.readdirSync(dir).sort(), before);
   assert.equal(fs.readFileSync(path.join(dir, 'tsconfig.tsbuildinfo'), 'utf8'), 'existing cache must survive');
-  assert.match(renderReport(report), /Fresh cache/);
+  assert.match(renderReport(report, false, { verbose: true }), /Fresh cache/);
 });
 
 test('compiler errors are reported as exit 2 in otherwise valid JSON output', t => {

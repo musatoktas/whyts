@@ -19,8 +19,57 @@ function comparisonLines(comparison) {
 
 const shareNote = h => h.checkTimeShareUpperBoundPercent != null ? `  (at most ${h.checkTimeShareUpperBoundPercent}% of Check)` : '';
 
-export function renderReport(report, color = false) {
+const where = l => l ? `${safe(l.file)}:${l.line}${l.character ? `:${l.character}` : ''}` : null;
+const MAX_COMPACT_ITEMS = 3;
+// A chain with no known pattern becomes an action only above this share of Check time.
+export const COMPACT_CHAIN_MIN_SHARE_PERCENT = 3;
+
+// Default terminal output: at most three actions, then one summary line. Everything else is behind --verbose.
+function renderCompact(report, bold) {
+  const native = report.compiler === 'native';
+  const check = report.diagnostics['Check time'], total = report.diagnostics['Total time'];
+  const lines = [bold(`whyts ${report.toolVersion}`) + ` · TypeScript ${report.typescriptVersion}${native ? ' (native, EXPERIMENTAL)' : ''} · ${safe(report.project)}`, ''];
+  const items = [];
+  for (const d of report.diagnoses ?? []) items.push({ kind: 'diagnosis', d });
+  if (items.length < MAX_COMPACT_ITEMS) {
+    const diagnosed = new Set((report.diagnoses ?? []).map(d => `${d.location?.file}:${d.location?.line}`));
+    // A chain whose type comparison names a type that a diagnosis already explains is not a separate action.
+    const explained = new Set((report.diagnoses ?? []).flatMap(d => (d.evidence.types ?? []).flatMap(t => [t.typeName, ...(t.nested ?? []).map(n => n.typeName)])));
+    const isExplained = f => (f.evidence.comparisons ?? []).some(c => explained.has(c.source.label) || explained.has(c.target.label));
+    for (const f of report.findings.filter(f => f.confidence === 'measured' && f.rule === 'source-check-chain')) {
+      if (!diagnosed.has(`${f.evidence.file}:${f.evidence.line}`) && !isExplained(f) && f.evidence.checkTimeShareUpperBoundPercent >= COMPACT_CHAIN_MIN_SHARE_PERCENT) items.push({ kind: 'finding', f });
+    }
+  }
+  const shown = items.slice(0, MAX_COMPACT_ITEMS);
+  if (!shown.length) lines.push(`No known slow pattern matched, and no check chain used ${COMPACT_CHAIN_MIN_SHARE_PERCENT}% or more of Check time. This does not establish that the project is fast.`);
+  shown.forEach((item, i) => {
+    if (item.kind === 'diagnosis') {
+      const d = item.d;
+      lines.push(bold(`${i + 1}. [${d.confidence}] ${safe(d.title)}`));
+      if (d.location) lines.push(`   Where: ${where(d.location)}`);
+      for (const line of d.evidence.summary ?? []) lines.push(`   ${safe(line)}`);
+      lines.push(`   Fix: ${safe(d.remedy)}`);
+      if (d.checkTimeShareUpperBoundPercent != null) lines.push(`   Cost: ${Number(d.milliseconds.toFixed(1))} ms, at most ${d.checkTimeShareUpperBoundPercent}% of Check time (upper bound, not a saving)`);
+      lines.push(`   Docs: ${safe(d.docs)}`);
+    } else {
+      const f = item.f, e = f.evidence;
+      lines.push(bold(`${i + 1}. [${f.confidence}] Slow check, no known pattern: ${safe(e.file)}:${e.line}:${e.character}`));
+      lines.push(`   ${e.milliseconds.toFixed(1)} ms recorded${e.checkTimeShareUpperBoundPercent != null ? `, at most ${e.checkTimeShareUpperBoundPercent}% of Check time` : ''}. Run with --verbose for the type comparisons.`);
+    }
+    lines.push('');
+  });
+  const errors = report.compilerErrors;
+  const parts = [`Check ${check ? check.value.toFixed(2) + 's' : 'n/a'}`, `Total ${total ? total.value.toFixed(2) + 's' : 'n/a'}`, `${report.summary.programFiles} files`];
+  if (errors?.total) parts.push(`${errors.total} compiler error${errors.total === 1 ? '' : 's'}`);
+  parts.push(`${report.findings.length} finding${report.findings.length === 1 ? '' : 's'} in the full report`);
+  lines.push(parts.join(' · ') + '. Use --verbose to see them.');
+  if (errors?.measurementMayBeInvalid) lines.push(`WARNING: ${errors.missingDependencyErrors} of ${errors.total} errors are unresolved modules or type declarations. These timings may not represent a healthy build.`);
+  return lines.join('\n') + '\n';
+}
+
+export function renderReport(report, color = false, { verbose = false } = {}) {
   const bold = s => color ? `\u001b[1m${s}\u001b[0m` : s;
+  if (!verbose) return renderCompact(report, bold);
   const native = report.compiler === 'native';
   const lines = [bold('whyts'), `TypeScript ${report.typescriptVersion}${native ? ' (native, EXPERIMENTAL)' : ''} · ${safe(report.project)}`];
   if (native) lines.push(`Experimental TypeScript 7 support. ${report.checkers} checker; Check time is not comparable with a default parallel tsc run.`);
@@ -40,6 +89,15 @@ export function renderReport(report, color = false) {
     lines.push(`First ${errors.first.length} errors:`);
     for (const e of errors.first) lines.push(`   ${e.file ? `${safe(e.file)}${e.line ? `:${e.line}:${e.character}` : ''}  ` : ''}${e.code}  ${safe(e.message)}`);
     if (errors.measurementMayBeInvalid) lines.push(`WARNING: ${errors.missingDependencyErrors} of ${errors.total} errors are unresolved modules or type declarations. Dependencies may be missing or not built; these timings may not represent a healthy build.`);
+  }
+  if (report.diagnoses?.length) {
+    lines.push('', bold(`${report.diagnoses.length} diagnoses`));
+    report.diagnoses.forEach((d, i) => {
+      lines.push(`${i + 1}. [${d.confidence}] ${safe(d.title)}`);
+      if (d.location) lines.push(`   Where: ${where(d.location)}`);
+      for (const line of d.evidence.details ?? d.evidence.summary ?? []) lines.push(`   ${safe(line)}`);
+      lines.push(`   Fix: ${safe(d.remedy)}`, `   Docs: ${safe(d.docs)}`);
+    });
   }
   lines.push('', bold(`${report.findings.length} findings; measured checks first`));
   if (!report.findings.length) lines.push('No finding crossed a measurement threshold or matched a structural rule. Recorded intervals remain below; this does not establish that the project is fast.');
