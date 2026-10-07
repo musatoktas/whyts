@@ -24,6 +24,14 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm pack --dry-run
+      - run: npm pack --dry-run ./packages/whyts-mcp
+      # Pack both packages, install them in an empty directory, start the whyts-mcp bin, check initialize and tools/list.
+      - name: Smoke test the packed packages
+        shell: bash
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          npm pack ./packages/whyts-mcp --pack-destination "$RUNNER_TEMP"
+          node scripts/smoke-whyts-mcp.mjs "$RUNNER_TEMP"/whyts-[0-9]*.tgz "$RUNNER_TEMP"/whyts-mcp-[0-9]*.tgz
   typescript-6:
     runs-on: ubuntu-latest
     steps:

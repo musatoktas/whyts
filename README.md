@@ -19,7 +19,7 @@ Requires Node.js 20+ and a TypeScript project with dependencies installed.
 npx whyts --project .
 ```
 
-For repeatable runs, pin a version: `npx whyts@0.8.0 --project .`
+For repeatable runs, pin a version: `npx whyts@0.8.1 --project .`
 
 To run from a checkout:
 
@@ -254,7 +254,7 @@ The exit code is `1` for sides that are not comparable, because the run has no v
 
 An AI coding agent cannot find slow types by reading code. The raw traces are too large for its context. whyts has an MCP server (Model Context Protocol, over stdio). It gives the agent a few KB of measured JSON instead.
 
-Start it with `npx -y -p whyts@0.8.0 -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp`. The MCP packages are not dependencies of whyts, so `npx -p` installs them next to it. These tools are available:
+Start it with `npx -y whyts-mcp`. The package `whyts-mcp` depends on `whyts` and on the MCP packages, so `npm install whyts` does not install them. These tools are available:
 
 | Tool | Use it to | Time |
 | --- | --- | --- |
@@ -277,7 +277,7 @@ Example, a `compare` result (`runs` 5):
 Claude Code:
 
 ```sh
-claude mcp add --transport stdio whyts -- npx -y -p whyts@0.8.0 -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp
+claude mcp add --transport stdio whyts -- npx -y whyts-mcp
 ```
 
 Add `--scope project` to write the entry to `.mcp.json` for your team. Claude Code limits each tool call with the `timeout` field (milliseconds) of the entry. Progress notifications do not extend that limit.
@@ -287,7 +287,7 @@ Cursor, in `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (all projects):
 ```json
 {
   "mcpServers": {
-    "whyts": { "command": "npx", "args": ["-y", "-p", "whyts@0.8.0", "-p", "@modelcontextprotocol/server@2", "-p", "zod@4", "whyts", "mcp"] }
+    "whyts": { "command": "npx", "args": ["-y", "whyts-mcp"] }
   }
 }
 ```
@@ -297,7 +297,7 @@ VS Code with GitHub Copilot, in `.vscode/mcp.json`:
 ```json
 {
   "servers": {
-    "whyts": { "command": "npx", "args": ["-y", "-p", "whyts@0.8.0", "-p", "@modelcontextprotocol/server@2", "-p", "zod@4", "whyts", "mcp"] }
+    "whyts": { "command": "npx", "args": ["-y", "whyts-mcp"] }
   }
 }
 ```
@@ -305,7 +305,7 @@ VS Code with GitHub Copilot, in `.vscode/mcp.json`:
 Codex:
 
 ```sh
-codex mcp add whyts -- npx -y -p whyts@0.8.0 -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp
+codex mcp add whyts -- npx -y whyts-mcp
 ```
 
 Codex stops a tool call after 60 seconds, and it stops a server start after 10 seconds. Raise both in `~/.codex/config.toml`:
@@ -313,18 +313,20 @@ Codex stops a tool call after 60 seconds, and it stops a server start after 10 s
 ```toml
 [mcp_servers.whyts]
 command = "npx"
-args = ["-y", "-p", "whyts@0.8.0", "-p", "@modelcontextprotocol/server@2", "-p", "zod@4", "whyts", "mcp"]
+args = ["-y", "whyts-mcp"]
 startup_timeout_sec = 60
 tool_timeout_sec = 900
 ```
 
-Other clients: run the command `npx -y -p whyts@0.8.0 -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp` over stdio. The server supports the 2025-11-25 protocol and the 2026-07-28 protocol.
+Other clients: run the command `npx -y whyts-mcp` over stdio. The server supports the 2025-11-25 protocol and the 2026-07-28 protocol.
 
 Give your agent the short rules in [docs/agents.md](docs/agents.md).
 
 The server runs the TypeScript compiler of the project that you name, as `tsc` does. It does not edit the project. The `typescript` input names a compiler package to run, so give the agent only paths that you trust.
 
-The MCP packages (`@modelcontextprotocol/server` and `zod`) are not dependencies of whyts. `npm install whyts` installs only `typescript`, as before. If you run `whyts mcp` without them, it prints the command above. The command pins whyts and the major versions of the two packages.
+The MCP packages (`@modelcontextprotocol/server` and `zod`) are not dependencies of whyts. `npm install whyts` installs only `typescript`, as before. The package `whyts-mcp` has the same version as `whyts` and depends on that exact version. The command `whyts mcp` still works. If the MCP packages are missing, it prints `npx -y whyts-mcp`.
+
+Alternative, if you want to start the server from the `whyts` package: `npx -y -p whyts@0.8.1 -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp`.
 
 ## Options for large projects
 
@@ -432,7 +434,7 @@ npm pack --dry-run
 
 Tests cover import chains, path aliases, cycles, dynamic imports, inherited configs, actually loaded duplicate types, nested and out-of-order trace events, chain grouping across source positions, thread/file isolation, comment-aware declarations, selective descriptor streaming with UTF-8 chunk boundaries and budgets, missing descriptors, project prioritization, barrel root overlap, terminal sanitization, real traced checks, cache preservation, compiler errors, JSON output, and timeouts. Further tests cover the run order, the warm-up exclusion, the summary values, the noise rule, the checks before a comparison, and the offline matching of findings. The MCP tests start `whyts mcp` with a raw stdio client and check the tool list, the compact results, the error paths, progress notifications and the stop of a running compiler. GitHub Actions runs Node 20/22/24 on Linux, Windows, and macOS.
 
-The implementation is plain ESM JavaScript so a checkout runs without a build step. TypeScript is the only required dependency. The MCP server needs two more packages, which `npx -p` installs on demand.
+The implementation is plain ESM JavaScript so a checkout runs without a build step. TypeScript is the only required dependency. The MCP server is in the separate package `whyts-mcp`, which adds two more packages.
 
 Bug reports are most useful with a tiny reproduction, Node/TypeScript versions, and expected versus actual output. Reports and traces may contain private filenames, source snippets, and type names; review them before sharing.
 
