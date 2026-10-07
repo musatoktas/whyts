@@ -1,3 +1,5 @@
+import { MIN_RUNS_FOR_VERDICT } from './timing.js';
+
 const safe = text => String(text).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
 
 function typeDescription(type) {
@@ -30,6 +32,7 @@ export function renderReport(report, color = false) {
   if (report.summary.wallMilliseconds !== undefined) lines.push(`Process wall time: ${(report.summary.wallMilliseconds / 1000).toFixed(2)}s` +
     (dump ? ` · Trace type dump: ${dump.value.toFixed(2)}s (not included in Compiler total)` : ''));
   lines.push('Fresh cache · no emit · tracing enabled');
+  if (report.timings) lines.push(...renderTimings(report.timings));
   if (report.summary.compilerExitCode !== 0) lines.push(`Compiler exited ${report.summary.compilerExitCode} with ${report.summary.errorCount} reported errors. Fix errors before comparing timings.`);
   const errors = report.compilerErrors;
   if (errors?.total) {
@@ -91,5 +94,50 @@ export function renderExplanation(result) {
   else if (result.chain.length) lines.push('One shortest observed import/reference chain:', ...result.chain.map((p, i) => `${'  '.repeat(i)}${i ? '→ ' : ''}${safe(p)}`));
   if (result.importedBy.length) lines.push('', 'Direct importers:', ...result.importedBy.map(p => `  ${safe(p)}`));
   if (result.note) lines.push('', result.note);
+  return lines.join('\n') + '\n';
+}
+
+const seconds = value => `${Number(Number(value).toFixed(3))}s`;
+const summaryText = m => m ? `median ${seconds(m.median)}, min ${seconds(m.min)}, max ${seconds(m.max)}, spread ${m.spreadPercent ?? 'n/a'}%` : 'n/a';
+
+export function renderTimings(timings) {
+  return ['', `Untraced timing, ${timings.runs} runs (${timings.mode}${timings.checkers ? `, ${timings.checkers} checker` : ''})`,
+    `   Check time: ${summaryText(timings.checkTime)}`, `   Total time: ${summaryText(timings.totalTime)}`,
+    '   The Compiler and Check values above come from the traced run. Use the untraced values for before and after comparisons.',
+    '   Spread is (max - min) as a percentage of the median.', ''];
+}
+
+const signed = (value, unit) => value == null ? 'n/a' : `${value > 0 ? '+' : ''}${value}${unit}`;
+
+function verdictText(metric) {
+  if (metric.verdict === 'separated') return `RANGES DO NOT OVERLAP: the candidate is ${metric.direction}`;
+  if (metric.verdict === 'within-noise') return 'WITHIN NOISE: the ranges overlap';
+  if (metric.verdict === 'insufficient-runs') return `NO VERDICT: each side needs at least ${MIN_RUNS_FOR_VERDICT} measured runs`;
+  return 'NO VERDICT: a timing is missing';
+}
+
+export function renderComparison(result, color = false) {
+  const bold = s => color ? `\u001b[1m${s}\u001b[0m` : s;
+  const lines = [bold(`whyts compare (${result.mode})`)];
+  const describe = (name, side) => `${name}: ${safe(side.project)} · TypeScript ${safe(side.typescriptVersion)}${side.compiler === 'native' ? ' (native, 1 checker)' : ''}` +
+    (side.programFiles != null ? ` · ${side.programFiles} files` : '');
+  lines.push(describe('Baseline ', result.baseline), describe('Candidate', result.candidate));
+  if (result.mode === 'live') lines.push(`${result.runs} measured runs per side in the order ${result.order} (A is the baseline). Each side ran once first as a warm-up; the warm-up runs are not in the numbers.`);
+  const failed = result.warnings.filter(w => w.startsWith('COMPILER ERRORS'));
+  if (failed.length) lines.push('', ...failed.map(w => bold(`WARNING: ${safe(w)}`)));
+  for (const [title, metric] of [['Check time', result.checkTime], ['Total time', result.totalTime]]) {
+    lines.push('', bold(title), `   baseline : ${summaryText(metric.baseline)}`, `   candidate: ${summaryText(metric.candidate)}`,
+      `   difference of medians: ${signed(metric.deltaMilliseconds, ' ms')} (${signed(metric.deltaPercent, '%')})`, `   ${verdictText(metric)}`);
+    if (metric.rule.chanceWithoutDifference != null) lines.push(`   Chance that the ranges do not overlap if both sides were the same: ${Number((metric.rule.chanceWithoutDifference * 100).toPrecision(2))}% (assumes independent runs)`);
+  }
+  if (result.findings) {
+    const { counts } = result.findings;
+    lines.push('', bold('Chains and file intervals (one traced run per report; samples, not stable measurements)'),
+      `   new ${counts.new}, gone ${counts.gone}, grown ${counts.grown}, shrunk ${counts.shrunk}, unchanged ${counts.unchanged}`);
+    const show = (label, list) => { for (const e of list.slice(0, 10)) lines.push(`   ${label.padEnd(7)} ${safe(e.file)}${e.line ? `:${e.line}:${e.character}` : ''} (${e.kind})  ${e.baselineMilliseconds == null ? '-' : e.baselineMilliseconds.toFixed(1)} -> ${e.candidateMilliseconds == null ? '-' : e.candidateMilliseconds.toFixed(1)} ms`); };
+    show('new', result.findings.new); show('gone', result.findings.gone); show('grown', result.findings.grown); show('shrunk', result.findings.shrunk);
+  }
+  const others = result.warnings.filter(w => !w.startsWith('COMPILER ERRORS'));
+  if (others.length) lines.push('', ...others.map(w => `Note: ${safe(w)}`));
   return lines.join('\n') + '\n';
 }
