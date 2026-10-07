@@ -320,6 +320,8 @@ tool_timeout_sec = 900
 
 Other clients: run the command `npx -y whyts-mcp` over stdio. The server supports the 2025-11-25 protocol and the 2026-07-28 protocol.
 
+The server is published to the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.musatoktas/whyts`.
+
 Give your agent the short rules in [docs/agents.md](docs/agents.md).
 
 The server runs the TypeScript compiler of the project that you name, as `tsc` does. It does not edit the project. The `typescript` input names a compiler package to run, so give the agent only paths that you trust.
