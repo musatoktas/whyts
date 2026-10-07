@@ -11,7 +11,7 @@
     "test": "node --test",
     "demo": "node src/cli.js --project examples/barrel",
     "demo:types": "node src/cli.js --project examples/type-comparison",
-    "check": "node --check src/cli.js && node --check src/analyze.js && node --check src/report.js && node --check src/trace.js && node --check src/timing.js && node --check src/compare.js && node --check src/types.js"
+    "check": "node --check src/cli.js && node --check src/analyze.js && node --check src/report.js && node --check src/trace.js && node --check src/timing.js && node --check src/compare.js && node --check src/types.js && node --check src/diagnose.js"
   },
   "dependencies": { "typescript": "^5.9.3" },
   "license": "MIT",
