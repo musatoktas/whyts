@@ -19,7 +19,7 @@ Requires Node.js 20+ and a TypeScript project with dependencies installed.
 npx whyts --project .
 ```
 
-For repeatable runs, pin a version: `npx whyts@0.5.0 --project .`
+For repeatable runs, pin a version: `npx whyts@0.6.0 --project .`
 
 To run from a checkout:
 
@@ -94,11 +94,111 @@ Findings alone do not fail CI. This release diagnoses; it does not enforce a per
 
 For a native TypeScript 7 run, the JSON has four more fields: `compiler` (`native`), `experimental` (`true`), `graphTypescriptVersion` and `checkers` (`1`). `typescriptVersion` is the version of the native compiler.
 
+## Measure repeatedly
+
+One run is weak evidence. In our tests, Check time changed by up to 10% between runs on the same tree. Use `--runs` to measure more than once.
+
+```sh
+npx whyts --project . --runs 5
+```
+
+How it works:
+
+- whyts first does the normal traced run. All results about chains and files come from this run.
+- Then whyts does N more runs without a trace. A trace slows the compiler and adds a large type dump.
+- Each run uses a new temporary incremental cache. Each run checks the whole program.
+- The flags are the same as in the traced run, but without `--generateTrace`. Your own build cache stays unchanged.
+- The traced run has read every file before. The file cache is warm for all N runs. whyts adds no warm-up run in this mode.
+- The report shows the median, the smallest value, the largest value and the spread. The spread is (largest minus smallest) divided by the median, in percent.
+- The default is `--runs 1`. One run adds no extra runs and no `timings` field.
+
+The Check time and Total time in the first lines of the report come from the traced run. Use the untraced values for before and after claims.
+
+The JSON gets an additive `timings` field. Schema version 1 stays the same. The field has `mode`, `runs`, `checkers`, `flags`, `compilerFiles`, `compilerExitCodes`, `checkTime` and `totalTime`. Each time object has `unit` (`s`), `runs`, `values`, `median`, `min`, `max` and `spreadPercent`. The compiler prints a rounded value. The JavaScript compiler prints 10 ms steps.
+
+TypeScript 7: the untraced runs use `--checkers 1`, like the traced run. We measured the Check time of the tRPC `packages/server` project with 15 interleaved runs for each mode. The spread was 18.1% with one checker and 19.2% with the default checkers. We saw no gain in stability from the default mode. One checker keeps the flags equal to the traced run, so a chain time and a Check time describe the same work. Do not compare this time with a default parallel `tsc` run. Several checkers are not supported in this release.
+
+## Compare two projects or two reports
+
+Live comparison runs both projects on this machine:
+
+```sh
+npx whyts compare --baseline ./before --candidate ./after --runs 10
+```
+
+Each side is a directory or a tsconfig file. `--runs` is the number of measured runs for each side. The default is 5, and the range is 1 to 100. The options `--timeout`, `--max-old-space-size`, `--typescript` and `--json` also work. A shared `--typescript` makes both sides use one compiler.
+
+Offline comparison reads two JSON reports:
+
+```sh
+npx whyts --project ./before --runs 10 --json > before.json
+npx whyts --project ./after --runs 10 --json > after.json
+npx whyts compare before.json after.json
+```
+
+### Order and warm-up
+
+- Each side runs once first, baseline then candidate. These warm-up runs are in the JSON under `warmup` and not in the numbers.
+- The first run reads all files from disk. The side that runs first would pay that cost alone. In our test, a first run with a cold file cache had a Total time 10% to 15% above the later runs. The Check time did not change.
+- The measured runs follow in pairs, and the order inside a pair flips each time: A B, B A, A B, B A. A is the baseline.
+- With this order, a slow drift of the machine gives no side an advantage. With an odd N, the baseline goes first once more than the candidate.
+- All runs use the untraced mode of `--runs`. The JSON shows the order in `order`.
+
+### The noise rule
+
+The rule is simple, and it is not a statistical test.
+
+1. For each side, take the smallest and the largest measured value.
+2. If the two ranges overlap, the result is `within-noise`. Ranges that only touch overlap.
+3. If the ranges do not overlap, the result is `separated`. The candidate is `faster` or `slower`.
+4. Each side needs at least 3 measured runs. With fewer, the result is `insufficient-runs`.
+
+The difference of the medians is in ms and in percent of the baseline median. The rule gives no confidence interval and no effect size.
+
+If both sides have the same distribution and the runs are independent, the chance of ranges that do not overlap is 2 divided by C(2N, N). This is 10% for N = 3, 0.79% for N = 5 and 0.0011% for N = 10. The JSON shows it as a fraction in `rule.chanceWithoutDifference`. A load spike or a drift breaks the assumption. Use at least 5 runs. Stop other heavy work on the machine during a comparison.
+
+The rule is conservative. A small slowdown can give `within-noise`. More runs widen the ranges, so more runs do not always help. In our tests, a Check time increase of about 10% was sometimes `within-noise`, and an increase of about 30% was always `separated`. See VALIDATION.md for the numbers. An unseparated result does not prove that there is no difference.
+
+### Checks before the comparison
+
+whyts stops with exit code 1 when:
+
+- one side uses the native compiler and the other side does not,
+- the checker counts differ,
+- the flags of the measurement runs differ,
+- one report has `timings` and the other report has none,
+- a report has an unknown schema version, or a file is not a whyts report.
+
+whyts prints a warning and continues when:
+
+- the TypeScript versions differ,
+- the file counts of the two programs differ (the `Files` line of the compiler),
+- a live comparison finds different compiler options in the two tsconfig files,
+- one side reports compiler errors (the warning starts with `COMPILER ERRORS`),
+- unresolved modules are most of the errors,
+- the whyts versions of the two reports differ.
+
+### Chains in an offline comparison
+
+whyts matches source check chains by file, line and character, and file check intervals by file. An edit above a chain moves its line. The chain then shows as gone at the old line and new at the new line. The result lists each entry as new, gone, grown, shrunk or unchanged. An entry grew or shrank when it changed by at least 10 ms and at least 10%. These limits are display limits, not statistics.
+
+These values come from one traced run for each report. They are samples. A chain that is only in one report can be below the 10 ms limit in the other report, or outside its five largest chains. whyts compares such a chain when the other report records it. It lists the chain as new or gone when the other report does not.
+
+### Output and exit codes
+
+`--json` prints the comparison. It has `kind` (`comparison`), `mode`, `baseline`, `candidate`, `checkTime`, `totalTime` and `warnings`. A live comparison adds `runs`, `order`, `warmup` and `measuredRuns`. An offline comparison adds `findings`. Progress goes to stderr.
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The comparison finished. A compiler error on one side gives a visible warning, not another code. |
+| `1` | A failure: a bad argument, an unreadable file, a compiler failure or a timeout, or a rejected comparison. |
+
 ## Options for large projects
 
 | Option | Meaning |
 | --- | --- |
 | `--timeout <seconds>` | Compiler time limit. The default is 900. |
+| `--runs <N>` | Do N untraced runs after the traced run. The report and the JSON show the median, smallest and largest value. The default is 1. See Measure repeatedly. |
 | `--max-old-space-size <MB>` | Set the heap limit of the compiler process. The range is 256 to 1048576. TypeScript 7 ignores it. |
 | `--typescript <path>` | Use this TypeScript package directory, or its `lib/typescript.js`, instead of the project compiler. The version may be 5.x, 6.x or 7.x. |
 
@@ -173,7 +273,7 @@ The compiler receives a new temporary incremental cache. Your existing build cac
 
 ## Measurement boundaries
 
-- Measures a **fresh-cache, traced type check**. It is not a timer for Next.js builds, bundling, tests, or the language server.
+- Measures a **fresh-cache, traced type check**. With `--runs`, it also measures fresh-cache untraced checks. It is not a timer for Next.js builds, bundling, tests, or the language server.
 - Trace generation and an empty cache affect timings. Compare runs with the same compiler, flags, hardware, and tracing mode. The report's wall timer excludes the earlier graph analysis.
 - Recorded check intervals are inclusive and expression/type events may be sampled. Overlapping intervals for the same file, source check, chain root, or type pair are merged. The five largest file checks and five largest project file checks are reported separately, plus five source chains (project first), up to five members and three contained comparisons per chain, and five global type comparisons. The five individual source checks remain in JSON for compatibility. These lists overlap and cannot be summed into total check time.
 - A comparison is associated with the innermost recorded source check only when its whole span fits inside that check on the same process/thread. The chain also collects comparisons contained in its members; they may occur outside the selected focus expression. Unrecorded checks, missing positions, or unavailable type descriptors reduce detail; whyts does not infer a missing causal chain.
@@ -196,7 +296,7 @@ npm test
 npm pack --dry-run
 ```
 
-Tests cover import chains, path aliases, cycles, dynamic imports, inherited configs, actually loaded duplicate types, nested and out-of-order trace events, chain grouping across source positions, thread/file isolation, comment-aware declarations, selective descriptor streaming with UTF-8 chunk boundaries and budgets, missing descriptors, project prioritization, barrel root overlap, terminal sanitization, real traced checks, cache preservation, compiler errors, JSON output, and timeouts. GitHub Actions runs Node 20/22/24 on Linux, Windows, and macOS.
+Tests cover import chains, path aliases, cycles, dynamic imports, inherited configs, actually loaded duplicate types, nested and out-of-order trace events, chain grouping across source positions, thread/file isolation, comment-aware declarations, selective descriptor streaming with UTF-8 chunk boundaries and budgets, missing descriptors, project prioritization, barrel root overlap, terminal sanitization, real traced checks, cache preservation, compiler errors, JSON output, and timeouts. Further tests cover the run order, the warm-up exclusion, the summary values, the noise rule, the checks before a comparison, and the offline matching of findings. GitHub Actions runs Node 20/22/24 on Linux, Windows, and macOS.
 
 The implementation is plain ESM JavaScript so a checkout runs without a build step. TypeScript is the only runtime dependency.
 
