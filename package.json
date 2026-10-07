@@ -14,7 +14,6 @@
     "check": "node --check src/cli.js && node --check src/analyze.js && node --check src/report.js && node --check src/trace.js && node --check src/timing.js && node --check src/compare.js && node --check src/types.js && node --check src/diagnose.js && node --check src/mcp.js && node --check src/mcp-tools.js"
   },
   "dependencies": { "typescript": "^5.9.3" },
-  "optionalDependencies": { "@modelcontextprotocol/server": "^2.3.1", "zod": "^4.2.0" },
   "license": "MIT",
   "author": "Musa Toktas",
   "keywords": ["typescript", "performance", "diagnostics", "cli", "tsconfig", "mcp", "model-context-protocol", "ai-agents"],

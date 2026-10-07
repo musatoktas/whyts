@@ -6,23 +6,22 @@ Done on 2026-10-07 (Dubai time), from about 14:55 to 16:15, with Node.js 24.21.0
 
 ## Dependency decision
 
-We measured three ways to add the official MCP SDK. Installs went into clean directories with `--ignore-scripts`. The counts come from `npm ls --all --parseable` (the whyts package is counted).
+We measured ways to add the official MCP SDK. Installs went into clean directories with `--ignore-scripts`. The counts come from `npm ls --all --parseable` (the whyts package is counted).
 
 | Install | Packages | Unpacked on disk |
 | --- | --- | --- |
 | whyts 0.7.1 | 2 | 23,648 KB |
-| whyts 0.8.0, default | 5 | 39,944 KB (+16,296 KB, +69%) |
-| whyts 0.8.0, `npm install --omit=optional` | 2 | 23,680 KB (+32 KB) |
+| whyts 0.8.0 (the packed tarball) | 2 | 23,680 KB (+32 KB) |
+| An earlier try: whyts with the MCP packages as optional dependencies | 5 | 39,944 KB (+69%) |
 | `typescript` and `@modelcontextprotocol/sdk` 1.32.1 (no whyts) | 95 | 52,496 KB (typescript alone: 1 package, 23,464 KB) |
 | `typescript`, `@modelcontextprotocol/server` 2.3.1 and `zod` 4.6.5 (no whyts) | 4 | 39,728 KB |
 
-The whyts tarball grows from 47,297 bytes to 56,742 bytes. The compressed downloads of the new packages are 1,537,977 bytes (`server`), 154,829 bytes (`core`) and 1,052,733 bytes (`zod`). The `typescript` 5.9.3 download is 4,377,468 bytes.
+Decision (Musa Toktas, 2026-10-07): the MCP packages are not in `package.json` at all, neither as dependencies nor as optional dependencies. The lock file holds only `typescript`, as in 0.7.1. `whyts mcp` loads `@modelcontextprotocol/server` and `zod` with a dynamic `import()`. If it cannot find them, it prints one line with the command that works: `npx -y -p whyts@0.8.0 -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp`. The README and the client setups use that command. `npx -p` installs the three packages into one directory, so the import finds them next to whyts.
 
-Choice: option (b). The server uses `@modelcontextprotocol/server` 2.x, and `zod`, as `optionalDependencies`. `whyts mcp` loads them with a dynamic `import()`. The CLI does not load them for any other command. Reasons:
-
-- The SDK 1.x package has 94 more packages. The 2.x `server` package has two dependencies (`zod` and its own `core`). The documentation of the SDK calls 2.x the stable line, and the npm `latest` tag of `@modelcontextprotocol/server` is 2.3.1. The `serveStdio` function of 2.x serves clients of both protocol revisions (2025-11-25 and 2026-07-28).
-- One package keeps one release process. Option (c), a second package, needs its own npm trusted publisher setup and a first manual publish.
-- The cost for an analysis user is real: a default install grows by 3 packages and 16 MB on disk. An optional dependency does not remove it. A user who does not want it runs `npm install --omit=optional`. Then `whyts mcp` prints one clear error. Option (c) would give no growth at all. It stays open if the 16 MB is not acceptable.
+- `npm install whyts` from the tarball: 2 packages and 23,680 KB, the same as 0.7.1 (the 32 KB are the new files of whyts). The tarball grows from 47,297 bytes to 57.0 kB (the size that `npm pack` prints).
+- The SDK 1.x package would add 94 packages, so we use 2.x. The npm `latest` tag of `@modelcontextprotocol/server` is 2.3.1, the SDK documentation calls 2.x the stable line, and its `serveStdio` serves clients of both protocol revisions (2025-11-25 and 2026-07-28). The command pins the major versions (`@2` and `zod@4`) that we tested.
+- The cost moves to the first start of `whyts mcp`: `npx` downloads `server` (1,537,977 bytes), `core` (154,829 bytes) and `zod` (1,052,733 bytes), and installs about 16 MB. `npx` keeps them in its cache. A client with a short start timeout (Codex: 10 seconds) needs a longer one for the first start. The README says so.
+- The layout was checked with the packed tarball and a new npm cache: `npx -y -p whyts-0.8.0.tgz -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp` made `_npx/<hash>/node_modules` with `whyts`, `typescript`, `zod` and `@modelcontextprotocol/{core,server}` side by side. The server started and answered `initialize`. We did not need a different way to resolve the packages (`createRequire(process.cwd())` or `import.meta.resolve`).
 
 ## Facts from the documentation
 
@@ -37,13 +36,13 @@ Choice: option (b). The server uses `@modelcontextprotocol/server` 2.x, and `zod
 
 | Compiler | Result |
 | --- | --- |
-| TypeScript 5.9.3 | 119 tests, 118 passed, 1 skipped (the real TypeScript 7 test) |
-| TypeScript 5.9.3 and `WHYTS_TS7` (7.0.2) | 119 tests, 119 passed |
-| TypeScript 6.0.3 and `WHYTS_TS7` (7.0.2) | 119 tests, 119 passed |
+| TypeScript 5.9.3 | 120 tests, 119 passed, 1 skipped (the real TypeScript 7 test) |
+| TypeScript 5.9.3 and `WHYTS_TS7` (7.0.2) | 120 tests, 120 passed |
+| TypeScript 6.0.3 and `WHYTS_TS7` (7.0.2) | 120 tests, 120 passed |
 
-The 95 tests of 0.7.1 pass without change. We added 24 tests in `test/mcp.test.js`. They cover the compact result shape, the cap of 5 diagnoses and 5 measured findings, the character limit, the three decisions of `compare`, the error kinds, one call at a time, progress values that grow, cancellation, and a raw stdio client against `whyts mcp` (a client of 2025-11-25 and a client of 2026-07-28 without a handshake). The error paths run through the real server: a missing project, an unsupported TypeScript (a fake 4.9.5 package) and a timeout (`timeoutSeconds` 0.05). With `npm ci --omit=optional`, the 9 server tests skip and the other 15 pass.
+The 95 tests of 0.7.1 pass without change. We added 25 tests in `test/mcp.test.js`. They cover the compact result shape, the cap of 5 diagnoses and 5 measured findings, the character limit, the three decisions of `compare`, the error kinds, one call at a time, progress values that grow, cancellation, and a raw stdio client against `whyts mcp` (a client of 2025-11-25 and a client of 2026-07-28 without a handshake). The error paths run through the real server: a missing project, an unsupported TypeScript (a fake 4.9.5 package) and a timeout (`timeoutSeconds` 0.05). One test starts a copy of whyts in a directory without `node_modules` and checks that `whyts mcp` prints one line with the `npx -p` command and exits with 1. Without the two MCP packages (`npm ci` only), the 9 server tests skip and the other 16 pass. CI installs the two packages with `npm install --no-save` after `npm ci`, so the matrix runs all 25.
 
-Mutation check. We changed `src/mcp-tools.js` or `src/mcp.js` 14 times and ran `test/mcp.test.js`. Each change was reverted.
+Mutation check (made before the change of the dependency decision; the loading code is not covered by it). We changed `src/mcp-tools.js` or `src/mcp.js` 14 times and ran `test/mcp.test.js`. Each change was reverted.
 
 | Change | Failed tests |
 | --- | --- |
@@ -66,17 +65,17 @@ Two changes were not caught at first. A cap of 50 diagnoses and a cap of 50 find
 
 ## Real MCP client: MCP Inspector
 
-Client: `@modelcontextprotocol/inspector` 2.9.0, CLI mode. The 2.x package has the binary `mcp-inspector`; the form is `mcp-inspector --cli <command and arguments> --method <method> --tool-name <name> --tool-arg key=value ...`. The server was the packed `whyts-0.8.0.tgz`, installed with its optional dependencies in a clean directory.
+Client: `@modelcontextprotocol/inspector` 2.9.0, CLI mode. The 2.x package has the binary `mcp-inspector`. The server was started by the `npx -p` command above, with the packed `whyts-0.8.0.tgz` in place of `whyts@0.8.0` (0.8.0 is not published) and a new npm cache. The Inspector reads `-y` and `-p` as its own options when the server command is on its command line, so the command went into a config file: `mcp-inspector --cli --config mcp-npx.json --server whyts --method tools/call --tool-name <name> --tool-arg key=value ...`.
 
 | Call | Result |
 | --- | --- |
 | `tools/list` | `analyze`, `compare`, `explain`, 6,048 bytes with the schemas |
-| `analyze` on `examples/type-comparison`, `runs=3` | 1,607 characters, wall 2.0 s, Check 0.04 s (median of 3 untraced runs), 1 measured finding, `diagnoses: []` |
-| `analyze` on `examples/barrel` | wall 2.2 s, 0 measured findings, 3 structural findings (`barrel-reach`, `broad-include`, `review-root-files`) |
-| `analyze` on the TanStack Form 1474 reproduction | 2,051 characters, wall 14.4 s |
-| `compare`, synthetic pair, `runs=5` | `separated`, `faster`, 1,170 characters, wall 4.9 s |
-| `explain` on `examples/barrel`, `src/shared/clamp.ts` | 369 bytes, chain `src/shared/clamp.ts`, importer `src/shared/index.ts` |
-| `analyze` on a missing project | `isError`, kind `not-found`; the Inspector exits with 5 |
+| `analyze` on `examples/type-comparison`, `runs=3` | 1,608 characters, wall 3.2 s, Check 0.04 s (median of 3 untraced runs), 1 measured finding, `diagnoses: []` |
+| `analyze` on `examples/barrel` | 965 characters, wall 2.7 s, 0 measured findings, 3 structural findings (`barrel-reach`, `broad-include`, `review-root-files`) |
+| `analyze` on the TanStack Form 1474 reproduction | 2,051 characters, wall 15.0 s |
+| `compare`, synthetic pair, `runs=5` | `separated`, `faster`, 1,169 characters, wall 5.6 s |
+| `explain` on `examples/barrel`, `src/shared/clamp.ts` | 261 characters, wall 1.5 s, chain `src/shared/clamp.ts`, importer `src/shared/index.ts` |
+| `analyze` on a missing project | `isError`, kind `not-found` (this call ran in the first Inspector run, with the packed tarball started directly: the Inspector exits with 5) |
 
 The TanStack reproduction (the `k.ts` of the earlier work, with `util-types.ts` of form-core commit 2216fde) gave the diagnosis in the MCP answer:
 
@@ -103,9 +102,10 @@ The `compare` over stdio with the scripted compiler (a fast candidate, and a can
 - We do not know which clients show progress notifications, or which of them reset a timeout on progress. The Inspector CLI shows none. The progress notifications were checked with a raw client in the tests, in both protocol eras.
 - No real run lasted longer than 15 seconds, so we did not see a heartbeat notification from a real compiler. The heartbeat is tested with a 10 to 20 ms interval and a fake engine.
 - Client cancellation (`notifications/cancelled`) was tested through the abort signal of `runTool` and through a closed stdin, not through a real client. The stop of the compiler uses the SIGTERM listener that the engine adds while a compiler runs.
+- The first start of `npx -p` on a machine with an empty cache was run on the bench only (a new cache directory, a fast network). We did not time it or try a slow network.
 - We did not run a multi-minute project through the server, and we did not run a native TypeScript 7 project through the MCP tools. The server tests use the 5.9.3 and 6.0.3 compilers and a fake compiler.
 - We measured the result size in characters (at most 12,000), not in tokens.
-- CI: the 9 matrix jobs (Linux, Windows and macOS, Node.js 20, 22 and 24) and the TypeScript 6 and TypeScript 7 jobs passed on the pull request. We did not read the MCP tests of each job one by one.
+- CI: see the pull request. The first version of this change passed all 11 jobs with the packages as optional dependencies. CI for the change to `npx -p` is recorded in the pull request text.
 
 # v0.7.1 validation
 
@@ -123,7 +123,7 @@ Done on 2026-10-07 (Dubai time) with Node.js 24.21.0 on Linux x64. The live runs
 
 The 90 tests of 0.7.0 pass without change in their meaning. Two of them changed: they used a failing side and a clean side, and they now expect `not-comparable`. We added 5 tests: a failing baseline with a clean candidate, the same errors on both sides, two clean sides, the offline rule, and the rule as a pure function.
 
-Mutation check. We changed `src/compare.js` three times and ran all tests. Each change was reverted.
+Mutation check (made before the change of the dependency decision; the loading code is not covered by it). We changed `src/compare.js` three times and ran all tests. Each change was reverted.
 
 | Change | Failed tests |
 | --- | --- |

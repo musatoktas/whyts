@@ -15,7 +15,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const cli = path.join(root, 'src/cli.js');
 const realCompiler = createRequire(import.meta.url).resolve('typescript');
 const sdk = await import('@modelcontextprotocol/server').then(() => true, () => false);
-const needsSdk = { skip: sdk ? false : 'the optional MCP dependencies are not installed' };
+const needsSdk = { skip: sdk ? false : '@modelcontextprotocol/server is not installed' };
 
 function temp(t, prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -421,6 +421,22 @@ test('whyts mcp serves a 2026-07-28 client that sends no initialize handshake', 
   assert.equal(call.result.isError ?? false, false, JSON.stringify(call));
   assert.equal(JSON.parse(call.result.content[0].text).file, 'a.ts');
   assert.equal(client.notifications.some(n => n.method === 'notifications/progress' && n.params.progressToken === 'modern-1'), true);
+});
+
+test('whyts mcp without the MCP packages prints the command that works', async t => {
+  // A copy of whyts in a directory with no node_modules cannot find the SDK.
+  const copy = temp(t, 'whyts-mcp-bare-');
+  fs.cpSync(path.join(root, 'src'), path.join(copy, 'src'), { recursive: true });
+  fs.copyFileSync(path.join(root, 'package.json'), path.join(copy, 'package.json'));
+  const result = await new Promise(resolve => {
+    const child = spawn(process.execPath, [path.join(copy, 'src/cli.js'), 'mcp'], { stdio: ['ignore', 'pipe', 'pipe'] }); let out = '', err = '';
+    child.stdout.on('data', c => { out += c; }); child.stderr.on('data', c => { err += c; });
+    child.on('close', code => resolve({ code, out, err }));
+  });
+  assert.equal(result.code, 1);
+  assert.equal(result.out, '');
+  assert.equal(result.err.trim().split('\n').length, 1, result.err);
+  assert.match(result.err, /npx -y -p whyts@\d+\.\d+\.\d+ -p @modelcontextprotocol\/server@2 -p zod@4 whyts mcp/);
 });
 
 test('whyts mcp answers --help and refuses extra arguments', async () => {

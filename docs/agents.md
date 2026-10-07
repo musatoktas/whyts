@@ -1,6 +1,6 @@
 # whyts instructions for AI coding agents
 
-Copy these rules into `AGENTS.md`, `CLAUDE.md` or the rules file of your agent. They assume the whyts MCP server is set up (see the README, "Use with AI coding agents").
+Copy these rules into `AGENTS.md`, `CLAUDE.md` or the rules file of your agent. They assume the whyts MCP server is set up. The command is `npx -y -p whyts@0.8.0 -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp`. See the README, "Use with AI coding agents".
 
 1. Call `analyze` first, with an absolute path, to find where the check time goes.
 2. Before you change types, copy the project. Use a git worktree, so `compare` has a baseline.

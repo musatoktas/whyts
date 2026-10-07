@@ -1,5 +1,5 @@
 // `whyts mcp`: a Model Context Protocol server on stdio. It gives AI coding agents three tools:
-// analyze, compare and explain. The MCP SDK is an optional dependency and loads only here.
+// analyze, compare and explain. The MCP SDK is not a dependency of whyts. It loads only here.
 import { runTool, toText, DEFAULT_COMPARE_RUNS } from './mcp-tools.js';
 import { toolVersion } from './analyze.js';
 
@@ -18,13 +18,18 @@ export const TOOL_DESCRIPTIONS = {
 
 const hint = (name, extra = {}) => ({ title: `whyts ${name}`, readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false, ...extra });
 
+// The MCP packages are not dependencies of whyts: an analysis install stays small. `npx -p` installs them
+// next to whyts, where the import below finds them.
+export const SDK_MAJOR = { server: 2, zod: 4 };
+export const MCP_COMMAND = `npx -y -p whyts@${toolVersion} -p @modelcontextprotocol/server@${SDK_MAJOR.server} -p zod@${SDK_MAJOR.zod} whyts mcp`;
+
 async function loadSdk() {
   try {
     const [server, stdio, z] = await Promise.all([import('@modelcontextprotocol/server'), import('@modelcontextprotocol/server/stdio'), import('zod/v4')]);
     return { McpServer: server.McpServer, serveStdio: stdio.serveStdio, z };
   } catch (error) {
     if (error?.code === 'ERR_MODULE_NOT_FOUND' || error?.code === 'MODULE_NOT_FOUND') {
-      throw new Error('whyts mcp needs the optional dependencies @modelcontextprotocol/server and zod. Install whyts again without --omit=optional.');
+      throw new Error(`whyts mcp needs the packages @modelcontextprotocol/server and zod. Start it with: ${MCP_COMMAND}`);
     }
     throw error;
   }

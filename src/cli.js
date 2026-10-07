@@ -35,7 +35,8 @@ Options:
   -v, --version  Show version
 
 mcp starts a Model Context Protocol server on stdio, so that AI coding agents can call
-analyze, compare and explain as tools. It needs the optional dependencies of whyts.
+analyze, compare and explain as tools. It needs @modelcontextprotocol/server and zod;
+start it with: npx -y -p whyts -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp
 
 Paths for explain are relative to the tsconfig directory.
 compare exit codes: 0 when the comparison finished, 1 on a failure, a rejected comparison, or sides that are not comparable (compiler errors that differ between the sides).
