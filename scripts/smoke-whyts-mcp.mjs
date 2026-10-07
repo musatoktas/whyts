@@ -9,14 +9,20 @@ const [whytsTgz, mcpTgz] = process.argv.slice(2).map(p => path.resolve(p));
 if (!whytsTgz || !mcpTgz) { console.error('Usage: node scripts/smoke-whyts-mcp.mjs <whyts.tgz> <whyts-mcp.tgz>'); process.exit(2); }
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-mcp-smoke-'));
-const done = code => { fs.rmSync(dir, { recursive: true, force: true }); process.exit(code); };
+// Wait until the child has ended: on Windows, a running child blocks the removal of its directory.
+let child;
+const done = async code => {
+  if (child && child.exitCode === null) { const closed = new Promise(r => child.once('close', r)); child.kill(); await closed; }
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  process.exit(code);
+};
 fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"smoke","private":true}');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const install = spawnSync(npm, ['install', '--ignore-scripts', '--no-audit', '--no-fund', whytsTgz, mcpTgz], { cwd: dir, encoding: 'utf8', shell: process.platform === 'win32' });
-if (install.status !== 0) { console.error(install.stdout, install.stderr); done(1); }
+if (install.status !== 0) { console.error(install.stdout, install.stderr); await done(1); }
 
 const bin = path.join(dir, 'node_modules', 'whyts-mcp', 'bin', 'whyts-mcp.js');
-const child = spawn(process.execPath, [bin], { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] });
+child = spawn(process.execPath, [bin], { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] });
 let buffer = '', stderr = '';
 const waiting = new Map();
 child.stderr.on('data', c => { stderr += c; });
@@ -43,10 +49,8 @@ try {
   const names = list.result.tools.map(t => t.name).sort();
   if (names.join() !== 'analyze,compare,explain') throw new Error(`Unexpected tools: ${names}`);
   console.log(JSON.stringify({ server: init.result.serverInfo, tools: names }));
-  child.kill();
-  done(0);
+  await done(0);
 } catch (error) {
   console.error(error.message);
-  child.kill('SIGKILL');
-  done(1);
+  await done(1);
 }
