@@ -19,7 +19,7 @@ Requires Node.js 20+ and a TypeScript project with dependencies installed.
 npx whyts --project .
 ```
 
-For repeatable runs, pin a version: `npx whyts@0.7.0 --project .`
+For repeatable runs, pin a version: `npx whyts@0.7.1 --project .`
 
 To run from a checkout:
 
@@ -214,9 +214,22 @@ whyts prints a warning and continues when:
 - the TypeScript versions differ,
 - the file counts of the two programs differ (the `Files` line of the compiler),
 - a live comparison finds different compiler options in the two tsconfig files,
-- one side reports compiler errors (the warning starts with `COMPILER ERRORS`),
+- both sides report the same compiler errors (the warning starts with `COMPILER ERRORS`),
 - unresolved modules are most of the errors,
 - the whyts versions of the two reports differ.
+
+### Compiler errors and comparable sides
+
+A compiler can stop early on an error, for example TS2589. Then the compiler does less work and its time is short. Two sides that do different work have no valid time comparison.
+
+whyts calls the sides not comparable when:
+
+- one side has compiler errors and the other side has none,
+- both sides have errors, and the error counts or the error codes differ.
+
+If the sides are not comparable, whyts prints `NOT COMPARABLE` and the reason. It shows the raw times and the error summary of each side. It shows no difference and no verdict.
+
+If both sides have the same errors, whyts keeps the verdict and prints the `COMPILER ERRORS` warning. A report that has no error data gives no code comparison. A clean side still decides.
 
 ### Chains in an offline comparison
 
@@ -228,10 +241,14 @@ These values come from one traced run for each report. They are samples. A chain
 
 `--json` prints the comparison. It has `kind` (`comparison`), `mode`, `baseline`, `candidate`, `checkTime`, `totalTime` and `warnings`. A live comparison adds `runs`, `order`, `warmup` and `measuredRuns`. An offline comparison adds `findings`. Progress goes to stderr.
 
+Version 0.7.1 adds three fields. Schema version 1 stays the same. `comparable` is `true` or `false`. `reason` is `null`, or the text that says why the sides are not comparable. `baseline.compilerErrors` and `candidate.compilerErrors` have `count` and `codes`, or `null` when a report has no error data. When `comparable` is `false`, the `verdict` of `checkTime` and `totalTime` is `not-comparable`. The difference fields are `null`. The time summaries stay.
+
 | Code | Meaning |
 | --- | --- |
-| `0` | The comparison finished. A compiler error on one side gives a visible warning, not another code. |
-| `1` | A failure: a bad argument, an unreadable file, a compiler failure or a timeout, or a rejected comparison. |
+| `0` | The comparison finished and the sides are comparable. Equal compiler errors on both sides give a visible warning, not another code. |
+| `1` | A failure: a bad argument, an unreadable file, a compiler failure or a timeout, or a rejected comparison. Also sides that are not comparable. |
+
+The exit code is `1` for sides that are not comparable, because the run has no valid result. A script that checks only the exit code must not read it as a pass. The output is still complete. Use `comparable` in the JSON to tell this case from a failure. A failure prints to stderr and gives no JSON.
 
 ## Options for large projects
 
