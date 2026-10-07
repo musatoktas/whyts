@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.musatoktas/whyts",
+  "description": "Find out why a TypeScript project is slow: measured analysis and before/after comparison.",
+  "repository": { "url": "https://github.com/musatoktas/whyts", "source": "github" },
+  "version": "0.8.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "whyts-mcp",
+      "version": "0.8.1",
+      "runtimeHint": "npx",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}
