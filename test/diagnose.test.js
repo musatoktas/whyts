@@ -19,7 +19,9 @@ import { renderReport } from '../src/report.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const fixtures = path.join(root, 'test/fixtures/diagnose');
-const readFixture = (name, base) => JSON.parse(fs.readFileSync(path.join(fixtures, name), 'utf8').replaceAll('{{base}}', base));
+// The base is escaped for JSON: a Windows path has backslashes.
+const jsonText = value => JSON.stringify(value).slice(1, -1);
+const readFixture = (name, base) => JSON.parse(fs.readFileSync(path.join(fixtures, name), 'utf8').replaceAll('{{base}}', jsonText(base)));
 const error = 'k.ts(4,17): error TS2589: Type instantiation is excessively deep and possibly infinite.';
 
 function recursionProject(t, { text = fs.readFileSync(path.join(fixtures, 'util-types.ts.txt'), 'utf8') } = {}) {
@@ -43,7 +45,7 @@ function diagnoseRecursion(t, name, { native = false } = {}) {
   const { base, project, graph } = recursionProject(t);
   const fixture = readFixture(`${name}-recursion.json`, base);
   // The native compiler writes lower case declaration paths into types_0.json.
-  const types = native ? JSON.parse(JSON.stringify(fixture.types).replaceAll(base, base.toLowerCase())) : fixture.types;
+  const types = native ? JSON.parse(JSON.stringify(fixture.types).replaceAll(jsonText(base), jsonText(base.toLowerCase()))) : fixture.types;
   const traceGraph = native ? Object.assign(Object.create(graph), { native: { identifierKind: 79 } }) : graph;
   const signals = collectSignals(fixture.events);
   const describe = typeDescriber(types, project, traceGraph);
