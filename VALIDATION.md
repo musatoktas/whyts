@@ -105,7 +105,7 @@ The `compare` over stdio with the scripted compiler (a fast candidate, and a can
 - Client cancellation (`notifications/cancelled`) was tested through the abort signal of `runTool` and through a closed stdin, not through a real client. The stop of the compiler uses the SIGTERM listener that the engine adds while a compiler runs.
 - We did not run a multi-minute project through the server, and we did not run a native TypeScript 7 project through the MCP tools. The server tests use the 5.9.3 and 6.0.3 compilers and a fake compiler.
 - We measured the result size in characters (at most 12,000), not in tokens.
-- CI on Windows and macOS: see the pull request.
+- CI: the 9 matrix jobs (Linux, Windows and macOS, Node.js 20, 22 and 24) and the TypeScript 6 and TypeScript 7 jobs passed on the pull request. We did not read the MCP tests of each job one by one.
 
 # v0.7.1 validation
 
