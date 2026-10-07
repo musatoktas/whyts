@@ -19,7 +19,7 @@ Requires Node.js 20+ and a TypeScript project with dependencies installed.
 npx whyts --project .
 ```
 
-For repeatable runs, pin a version: `npx whyts@0.7.1 --project .`
+For repeatable runs, pin a version: `npx whyts@0.8.0 --project .`
 
 To run from a checkout:
 
@@ -250,6 +250,82 @@ Version 0.7.1 adds three fields. Schema version 1 stays the same. `comparable` i
 
 The exit code is `1` for sides that are not comparable, because the run has no valid result. A script that checks only the exit code must not read it as a pass. The output is still complete. Use `comparable` in the JSON to tell this case from a failure. A failure prints to stderr and gives no JSON.
 
+## Use with AI coding agents
+
+An AI coding agent cannot find slow types by reading code. The raw traces are too large for its context. whyts has an MCP server (Model Context Protocol, over stdio). It gives the agent a few KB of measured JSON instead.
+
+Start it with `npx -y whyts mcp`. These tools are available:
+
+| Tool | Use it to | Time |
+| --- | --- | --- |
+| `analyze` | Find where the check time goes. Returns Check time, compiler error summary, `diagnoses` with a remedy, the top 5 measured findings, and warnings. | One traced type check, plus `runs` untraced checks |
+| `compare` | Prove that a change made the check faster or slower. Returns `separated`, `within-noise` or `not-comparable`, with medians and the reason. | About 2 x `runs` + 2 type checks (`runs` is 5 by default) |
+| `explain` | Show why one file is in the program: the import chain and the direct importers. | Seconds. It does not run the type checker. |
+
+Each result is one JSON text, at most 12,000 characters. If whyts shortens a result, the field `truncated` says what it cut. Paths are absolute. Errors return `isError` with a `kind` and a `hint`. whyts runs one call at a time, because two type checks at once distort the timings. When the client sends a progress token, whyts sends a progress notification every 15 seconds and at each timing run.
+
+Example, a `compare` result (`runs` 5):
+
+```json
+{"tool":"whyts","mode":"compare","decision":"separated","direction":"faster",
+ "rationale":"Every run of the candidate was faster than every baseline run (5 runs per side; the min-max ranges do not overlap). ...",
+ "checkTime":{"baseline":{"median":0.21,"min":0.2,"max":0.22},"candidate":{"median":0.03,"min":0.03,"max":0.04},"deltaMilliseconds":-180,"deltaPercent":-85.7}}
+```
+
+### Set up a client
+
+Claude Code:
+
+```sh
+claude mcp add --transport stdio whyts -- npx -y whyts mcp
+```
+
+Add `--scope project` to write the entry to `.mcp.json` for your team. Claude Code limits each tool call with the `timeout` field (milliseconds) of the entry. Progress notifications do not extend that limit.
+
+Cursor, in `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (all projects):
+
+```json
+{
+  "mcpServers": {
+    "whyts": { "command": "npx", "args": ["-y", "whyts", "mcp"] }
+  }
+}
+```
+
+VS Code with GitHub Copilot, in `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "whyts": { "command": "npx", "args": ["-y", "whyts", "mcp"] }
+  }
+}
+```
+
+Codex:
+
+```sh
+codex mcp add whyts -- npx -y whyts mcp
+```
+
+Codex stops a tool call after 60 seconds, and it stops a server start after 10 seconds. Raise both in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.whyts]
+command = "npx"
+args = ["-y", "whyts", "mcp"]
+startup_timeout_sec = 60
+tool_timeout_sec = 900
+```
+
+Other clients: run the command `npx -y whyts mcp` over stdio. The server supports the 2025-11-25 protocol and the 2026-07-28 protocol. Pin a version (`whyts@0.8.0`) for repeatable runs.
+
+Give your agent the short rules in [docs/agents.md](docs/agents.md).
+
+The server runs the TypeScript compiler of the project that you name, as `tsc` does. It does not edit the project. The `typescript` input names a compiler package to run, so give the agent only paths that you trust.
+
+The MCP packages (`@modelcontextprotocol/server` and `zod`) are optional dependencies. They add 3 packages and about 16 MB to an install. Only `whyts mcp` loads them. To skip them, run `npm install --omit=optional whyts`.
+
 ## Options for large projects
 
 | Option | Meaning |
@@ -354,9 +430,9 @@ npm test
 npm pack --dry-run
 ```
 
-Tests cover import chains, path aliases, cycles, dynamic imports, inherited configs, actually loaded duplicate types, nested and out-of-order trace events, chain grouping across source positions, thread/file isolation, comment-aware declarations, selective descriptor streaming with UTF-8 chunk boundaries and budgets, missing descriptors, project prioritization, barrel root overlap, terminal sanitization, real traced checks, cache preservation, compiler errors, JSON output, and timeouts. Further tests cover the run order, the warm-up exclusion, the summary values, the noise rule, the checks before a comparison, and the offline matching of findings. GitHub Actions runs Node 20/22/24 on Linux, Windows, and macOS.
+Tests cover import chains, path aliases, cycles, dynamic imports, inherited configs, actually loaded duplicate types, nested and out-of-order trace events, chain grouping across source positions, thread/file isolation, comment-aware declarations, selective descriptor streaming with UTF-8 chunk boundaries and budgets, missing descriptors, project prioritization, barrel root overlap, terminal sanitization, real traced checks, cache preservation, compiler errors, JSON output, and timeouts. Further tests cover the run order, the warm-up exclusion, the summary values, the noise rule, the checks before a comparison, and the offline matching of findings. The MCP tests start `whyts mcp` with a raw stdio client and check the tool list, the compact results, the error paths, progress notifications and the stop of a running compiler. GitHub Actions runs Node 20/22/24 on Linux, Windows, and macOS.
 
-The implementation is plain ESM JavaScript so a checkout runs without a build step. TypeScript is the only runtime dependency.
+The implementation is plain ESM JavaScript so a checkout runs without a build step. TypeScript is the only required dependency. The MCP server adds two optional dependencies.
 
 Bug reports are most useful with a tiny reproduction, Node/TypeScript versions, and expected versus actual output. Reports and traces may contain private filenames, source snippets, and type names; review them before sharing.
 
