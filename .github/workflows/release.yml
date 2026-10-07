@@ -8,6 +8,8 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,15 +17,19 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - name: Verify tag matches package.json version
+      - name: Verify tag matches whyts, whyts-mcp and server.json versions
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          version=$(node -p "require('./package.json').version")
-          if [ "$TAG" != "v$version" ]; then
-            echo "Release tag '$TAG' does not match package.json version '$version' (expected 'v$version')." >&2
-            exit 1
-          fi
+          versions=$(node -p "[require('./package.json').version, require('./packages/whyts-mcp/package.json').version, require('./server.json').version, require('./server.json').packages[0].version].join(' ')")
+          for version in $versions; do
+            if [ "$TAG" != "v$version" ]; then
+              echo "Release tag '$TAG' does not match a version in package.json, packages/whyts-mcp/package.json or server.json ($versions). Expected 'v<version>' everywhere." >&2
+              exit 1
+            fi
+          done
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+        id: version
       - name: Use npm 11.5.1 or newer
         run: |
           npm_version=$(npm --version)
@@ -34,4 +40,40 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test
+      - name: Smoke test the packed packages
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          npm pack ./packages/whyts-mcp --pack-destination "$RUNNER_TEMP"
+          node scripts/smoke-whyts-mcp.mjs "$RUNNER_TEMP"/whyts-[0-9]*.tgz "$RUNNER_TEMP"/whyts-mcp-[0-9]*.tgz
       - run: npm publish --access public
+      # whyts-mcp is published after whyts, because it depends on the exact version of whyts.
+      # The first publish of whyts-mcp is done by hand (docs/releasing.md). While the package does not exist
+      # on npm, this step warns and ends without an error.
+      - name: Publish whyts-mcp
+        id: mcp
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if ! lookup=$(npm view whyts-mcp name 2>&1); then
+            if echo "$lookup" | grep -q E404; then
+              echo "::warning::whyts-mcp does not exist on npm yet. Skipping its publish. Publish it by hand once (docs/releasing.md)."
+              exit 0
+            fi
+            echo "$lookup" >&2
+            exit 1
+          fi
+          if [ "$(npm view "whyts-mcp@$VERSION" version 2>/dev/null || true)" = "$VERSION" ]; then
+            echo "whyts-mcp@$VERSION is already on npm. Nothing to publish."
+            exit 0
+          fi
+          cd packages/whyts-mcp
+          npm publish --access public
+  registry:
+    needs: publish
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/mcp-registry.yml
+    with:
+      version: ${{ needs.publish.outputs.version }}
+      skip-if-missing: true

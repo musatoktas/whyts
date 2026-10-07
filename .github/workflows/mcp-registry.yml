@@ -1,0 +1,86 @@
+name: MCP Registry
+# Publishes server.json to the official MCP Registry with GitHub OIDC (no secret).
+# Manual use: after the first manual `npm publish` of whyts-mcp, run this workflow once (Actions, "MCP Registry", Run workflow).
+# The release workflow calls it after each release.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish (for example 0.8.1). It must equal the version in server.json and be on npm.
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      skip-if-missing:
+        description: Skip with a warning when whyts-mcp@version is not on npm.
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: read
+jobs:
+  registry:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # GitHub OIDC login to the MCP Registry
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Check the versions
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node -e "
+            const read = f => JSON.parse(require('fs').readFileSync(f, 'utf8'));
+            const v = process.env.VERSION, s = read('server.json'), p = read('packages/whyts-mcp/package.json');
+            const bad = [];
+            if (s.version !== v) bad.push('server.json version ' + s.version);
+            if (s.packages.length !== 1 || s.packages[0].identifier !== 'whyts-mcp' || s.packages[0].version !== v) bad.push('server.json package entry');
+            if (p.version !== v) bad.push('packages/whyts-mcp/package.json version ' + p.version);
+            if (p.mcpName !== s.name) bad.push('mcpName ' + p.mcpName + ' does not equal server.json name ' + s.name);
+            if (bad.length) { console.error('Mismatch with ' + v + ': ' + bad.join('; ')); process.exit(1); }
+          "
+      - name: Check that whyts-mcp is on npm
+        id: npm
+        env:
+          VERSION: ${{ inputs.version }}
+          SKIP_IF_MISSING: ${{ inputs.skip-if-missing }}
+        run: |
+          # npm can need a short time to show a version that was just published.
+          for attempt in 1 2 3 4 5 6; do
+            found=$(npm view "whyts-mcp@$VERSION" version 2>/dev/null || true)
+            if [ "$found" = "$VERSION" ]; then
+              echo "whyts-mcp@$VERSION is on npm."
+              echo "present=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 10
+          done
+          if [ "$SKIP_IF_MISSING" = "true" ]; then
+            echo "::warning::whyts-mcp@$VERSION is not on npm. The MCP Registry step is skipped. Publish whyts-mcp by hand once (docs/releasing.md), then run the MCP Registry workflow."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "whyts-mcp@$VERSION is not on npm. Publish it first (docs/releasing.md)." >&2
+          exit 1
+      - name: Install mcp-publisher
+        if: steps.npm.outputs.present == 'true'
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher --help | head -5
+      - name: Validate server.json
+        if: steps.npm.outputs.present == 'true'
+        run: ./mcp-publisher validate
+      - name: Log in to the MCP Registry
+        if: steps.npm.outputs.present == 'true'
+        run: ./mcp-publisher login github-oidc
+      - name: Publish to the MCP Registry
+        if: steps.npm.outputs.present == 'true'
+        run: ./mcp-publisher publish

@@ -1,5 +1,6 @@
-// `whyts mcp`: a Model Context Protocol server on stdio. It gives AI coding agents three tools:
-// analyze, compare and explain. The MCP SDK is not a dependency of whyts. It loads only here.
+// `whyts mcp` and the `whyts-mcp` package: a Model Context Protocol server on stdio. It gives AI coding agents
+// three tools: analyze, compare and explain. The MCP SDK is not a dependency of whyts. The `whyts-mcp` package
+// depends on it and passes it to `serve()`. `whyts mcp` loads it from the install (see `loadSdk`).
 import { runTool, toText, DEFAULT_COMPARE_RUNS } from './mcp-tools.js';
 import { toolVersion } from './analyze.js';
 
@@ -18,10 +19,9 @@ export const TOOL_DESCRIPTIONS = {
 
 const hint = (name, extra = {}) => ({ title: `whyts ${name}`, readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false, ...extra });
 
-// The MCP packages are not dependencies of whyts: an analysis install stays small. `npx -p` installs them
-// next to whyts, where the import below finds them.
-export const SDK_MAJOR = { server: 2, zod: 4 };
-export const MCP_COMMAND = `npx -y -p whyts@${toolVersion} -p @modelcontextprotocol/server@${SDK_MAJOR.server} -p zod@${SDK_MAJOR.zod} whyts mcp`;
+// The MCP packages are not dependencies of whyts: an analysis install stays small. The package `whyts-mcp`
+// depends on them. The command `npx -y whyts-mcp` installs all of them together.
+export const MCP_COMMAND = 'npx -y whyts-mcp';
 
 async function loadSdk() {
   try {
@@ -29,7 +29,7 @@ async function loadSdk() {
     return { McpServer: server.McpServer, serveStdio: stdio.serveStdio, z };
   } catch (error) {
     if (error?.code === 'ERR_MODULE_NOT_FOUND' || error?.code === 'MODULE_NOT_FOUND') {
-      throw new Error(`whyts mcp needs the packages @modelcontextprotocol/server and zod. Start it with: ${MCP_COMMAND}`);
+      throw new Error(`whyts mcp needs the packages @modelcontextprotocol/server and zod. Start the server with: ${MCP_COMMAND}`);
     }
     throw error;
   }
@@ -74,8 +74,10 @@ export function createServer(sdk, run = runTool) {
   return server;
 }
 
-export async function serve() {
-  const sdk = await loadSdk();
+// `sdk` is { McpServer, serveStdio, z }. The `whyts-mcp` package loads it from its own dependencies and passes it in,
+// so the server does not depend on where a package manager puts the files. Without `sdk`, `loadSdk` looks next to whyts.
+export async function serve(sdk) {
+  sdk ??= await loadSdk();
   // stdout carries the protocol. Everything else goes to stderr.
   sdk.serveStdio(() => createServer(sdk), { onerror: error => process.stderr.write(`whyts mcp: ${error.message}\n`) });
   process.stderr.write(`whyts mcp ${toolVersion}: ready on stdio\n`);

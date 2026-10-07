@@ -436,7 +436,7 @@ test('whyts mcp without the MCP packages prints the command that works', async t
   assert.equal(result.code, 1);
   assert.equal(result.out, '');
   assert.equal(result.err.trim().split('\n').length, 1, result.err);
-  assert.match(result.err, /npx -y -p whyts@\d+\.\d+\.\d+ -p @modelcontextprotocol\/server@2 -p zod@4 whyts mcp/);
+  assert.match(result.err, /npx -y whyts-mcp\s*$/);
 });
 
 test('whyts mcp answers --help and refuses extra arguments', async () => {

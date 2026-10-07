@@ -1,0 +1,21 @@
+{
+  "name": "whyts-mcp",
+  "version": "0.8.1",
+  "mcpName": "io.github.musatoktas/whyts",
+  "description": "MCP server for whyts: find out why your TypeScript project is slow. Evidence, not guesses.",
+  "type": "module",
+  "bin": { "whyts-mcp": "bin/whyts-mcp.js" },
+  "files": ["bin", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "whyts": "0.8.1",
+    "@modelcontextprotocol/server": "^2",
+    "zod": "^4"
+  },
+  "license": "MIT",
+  "author": "Musa Toktas",
+  "keywords": ["mcp", "model-context-protocol", "typescript", "performance", "diagnostics", "ai-agents", "whyts"],
+  "repository": { "type": "git", "url": "git+https://github.com/musatoktas/whyts.git", "directory": "packages/whyts-mcp" },
+  "bugs": { "url": "https://github.com/musatoktas/whyts/issues" },
+  "homepage": "https://github.com/musatoktas/whyts#use-with-ai-coding-agents"
+}
