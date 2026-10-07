@@ -4,7 +4,8 @@ import os from 'node:os';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
-import { traceDetails, selectedTypeIds, resolveTraceTypes } from './trace.js';
+import { traceDetails, selectedTypeIds, resolveTraceTypes, typeDescriber } from './trace.js';
+import { collectSignals, signalTypeIds, buildDiagnoses } from './diagnose.js';
 import { readTypeDescriptors } from './types.js';
 import { buildTimings } from './timing.js';
 export { traceHotspots } from './trace.js';
@@ -312,7 +313,7 @@ export function parseCompilerErrors(output, limit = 5, base = null) {
     try { real = fs.realpathSync(absolute); } catch { /* A file that no longer exists keeps its resolved path. */ }
     return display(realBase, real);
   };
-  const first = [], counts = new Map();
+  const first = [], counts = new Map(), excessiveDepth = [];
   let total = 0, missingDependencyErrors = 0;
   for (const line of output.split(/\r?\n/)) {
     const match = line.match(/^(?:(.+?)\((\d+),(\d+)\): )?error (TS\d+): (.*)$/);
@@ -320,13 +321,16 @@ export function parseCompilerErrors(output, limit = 5, base = null) {
     total++;
     counts.set(match[4], (counts.get(match[4]) ?? 0) + 1);
     if (moduleErrorCodes.has(match[4])) missingDependencyErrors++;
-    if (first.length < limit) first.push({ file: match[1] ? locate(match[1]) : null, line: match[2] ? Number(match[2]) : null,
+    const entry = () => ({ file: match[1] ? locate(match[1]) : null, line: match[2] ? Number(match[2]) : null,
       character: match[3] ? Number(match[3]) : null, code: match[4], message: clean(match[5].trim().slice(0, 200)) });
+    if (first.length < limit) first.push(entry());
+    // TS2589: the compiler gave up on a type instantiation. These sites feed the recursion diagnosis.
+    if (match[4] === 'TS2589' && match[1] && excessiveDepth.length < 5) excessiveDepth.push(entry());
   }
   const codes = [...counts].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)).slice(0, 10);
   // Half or more of all errors being unresolved modules/types means dependencies are probably missing or unbuilt.
   const measurementMayBeInvalid = total > 0 && missingDependencyErrors * 2 >= total;
-  return { total, first, codes, missingDependencyErrors, measurementMayBeInvalid };
+  return { total, first, codes, missingDependencyErrors, measurementMayBeInvalid, excessiveDepth };
 }
 
 function duplicateTypes(graph, base) {
@@ -399,11 +403,14 @@ export async function readTrace(traceFile, temporary, project, graph, native = n
     try {
       // Native traces: UTF-8 byte offsets, Go SyntaxKind numbers, and one types_<n>.json per checker (a single checker is forced).
       const traceGraph = native ? Object.assign(Object.create(graph), { native }) : graph;
-      const details = traceDetails(JSON.parse(fs.readFileSync(traceFile, 'utf8')), [], project.base, traceGraph);
+      const events = JSON.parse(fs.readFileSync(traceFile, 'utf8'));
+      const details = traceDetails(events, [], project.base, traceGraph);
+      const signals = collectSignals(events);
       const typesFile = path.join(temporary, native ? 'types_0.json' : 'types.json');
-      const loaded = await readTypeDescriptors(typesFile, selectedTypeIds(details));
+      const loaded = await readTypeDescriptors(typesFile, new Set([...selectedTypeIds(details), ...signalTypeIds(signals)]));
       result.typeDescriptors = loaded.stats; result.warnings.push(...loaded.warnings);
       Object.assign(result, resolveTraceTypes(details, loaded.descriptors, project.base, traceGraph));
+      result.signals = signals; result.describe = typeDescriber(loaded.descriptors, project.base, traceGraph);
     } catch (error) { result.warnings.push(`Trace could not be parsed (${errorSummary(error)}). Other diagnostics remain available.`); }
   }
   return result;
@@ -525,6 +532,8 @@ export async function analyze(options = {}) {
     const { typeHotspots, typeDescriptors } = trace;
     const traceWarnings = trace.warnings;
     findings.push(...measuredFindings({ hotspots, projectHotspots, sourceGroups }));
+    const diagnoses = buildDiagnoses({ signals: trace.signals, describe: trace.describe, checkSeconds, graph, base: project.base, compilerErrors,
+      intervals: { sourceGroups, projectHotspots } });
     const confidenceRank = { measured: 0, observed: 1, review: 2 };
     findings.sort((a, b) => confidenceRank[a.confidence] - confidenceRank[b.confidence]);
     return { schemaVersion: 1, toolVersion, typescriptVersion: compiler.native?.version ?? compiler.ts.version,
@@ -534,7 +543,7 @@ export async function analyze(options = {}) {
         errorCount: compilerErrors.total, wallMilliseconds, dumpTypesSeconds: diagnostics['Dump types time']?.value ?? null,
         mode: 'fresh-cache, no-emit, tracing enabled', analysisOverheadExcluded: true },
       ...(timed ? { timings: timed.timings } : {}),
-      diagnostics, compilerErrors, findings, hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots, typeDescriptors, warnings: [
+      diagnostics, compilerErrors, findings, diagnoses, hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots, typeDescriptors, warnings: [
         ...(compiler.native ? [NATIVE_EXPERIMENTAL_WARNING, NATIVE_ONE_CHECKER_WARNING] : []),
         compiler.native && options.maxOldSpaceMb ? NATIVE_HEAP_WARNING : null,
         compiler.native ? fileCountWarning(graph.files.size, diagnostics.Files?.value) : null,

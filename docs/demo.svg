@@ -1,21 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="570" viewBox="0 0 960 570" role="img" aria-label="A whyts report locating a client assignment and the compared type declarations">
-<rect width="960" height="570" rx="16" fill="#0d1422"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="535" viewBox="0 0 960 535" role="img" aria-label="A whyts report that names a recursive type, its location and a fix">
+<rect width="960" height="535" rx="16" fill="#0d1422"/>
 <circle cx="30" cy="27" r="6" fill="#f47b76"/><circle cx="50" cy="27" r="6" fill="#e9bc6d"/><circle cx="70" cy="27" r="6" fill="#76e6b4"/>
 <text x="480" y="32" text-anchor="middle" fill="#8d9ab2" font-family="monospace" font-size="13">whyts · evidence, not guesses</text>
-<text x="30" y="75" fill="#76e6b4" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16">whyts</text>
-<text x="30" y="102" fill="#8d9ab2" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16">TypeScript 5.9.3 · examples/type-comparison/tsconfig.json</text>
-<text x="30" y="129" fill="#fff" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16"></text>
-<text x="30" y="156" fill="#edf2fa" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16">Compiler: 0.20s · Check: 0.05s · Program files: 58</text>
-<text x="30" y="183" fill="#8d9ab2" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16">Fresh cache · no emit · tracing enabled</text>
-<text x="30" y="210" fill="#fff" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16"></text>
-<text x="30" y="237" fill="#76e6b4" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16">[measured] client.ts:16:14 · 38.4 ms variable check</text>
-<text x="30" y="264" fill="#d6deeb" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16">  publicClient: PublicClient = fullClient</text>
-<text x="30" y="291" fill="#fff" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16"></text>
-<text x="30" y="318" fill="#e9bc6d" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16">  31.8 ms recorded type comparison (inclusive)</text>
-<text x="30" y="345" fill="#d6deeb" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16">    source: FullClient (#844) [Object] at client.ts:8:1</text>
-<text x="30" y="372" fill="#fff" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16"></text>
-<text x="30" y="399" fill="#d6deeb" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16">    target: PublicClient (#848) [Object] at client.ts:11:1</text>
-<text x="30" y="426" fill="#8d9ab2" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16">  Start with this assignment and the listed type declarations.</text>
-<text x="30" y="453" fill="#fff" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16"></text>
-<text x="30" y="480" fill="#8d9ab2" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="16">  Validate behavior and remeasure any change.</text>
-<text x="30" y="545" fill="#8d9ab2" font-family="monospace" font-size="12">Recorded example run. Timings vary; findings do not predict savings.</text></svg>
+<text x="30" y="70" fill="#76e6b4" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">whyts 0.7.0 · TypeScript 5.9.3 · repro-project/tsconfig.json</text>
+<text x="30" y="120" fill="#e9bc6d" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">1. [measured] Recursive type instantiation: DeepKeys&lt;Values&gt;</text>
+<text x="30" y="145" fill="#d6deeb" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">   Where: k.ts:4:17</text>
+<text x="30" y="170" fill="#d6deeb" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">   TS2589 at this place: Type instantiation is excessively deep and possibly infinite.</text>
+<text x="30" y="195" fill="#d6deeb" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">   It hit the instantiation limit inside DeepKeysAndValuesImpl (../src/util-types.ts:151).</text>
+<text x="30" y="220" fill="#d6deeb" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">   DeepKeysAndValuesImpl refers to itself: DeepKeysAndValuesImpl -&gt; DeepKeyAndValueArray</text>
+<text x="30" y="245" fill="#d6deeb" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">   -&gt; DeepKeysAndValuesImpl.</text>
+<text x="30" y="270" fill="#d6deeb" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">   Type argument JsonData (k.ts:2): JsonData refers to itself.</text>
+<text x="30" y="295" fill="#76e6b4" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">   Fix: Stop the expansion of DeepKeysAndValuesImpl when it meets a type it already visited.</text>
+<text x="30" y="320" fill="#76e6b4" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">   Or add a depth limit to it. Check that the fix keeps the same results.</text>
+<text x="30" y="345" fill="#8d9ab2" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">   Cost: 10875.5 ms, at most 99.4% of Check time (upper bound, not a saving)</text>
+<text x="30" y="370" fill="#8d9ab2" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">   Docs: https://github.com/microsoft/TypeScript/wiki/Performance</text>
+<text x="30" y="420" fill="#edf2fa" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">Check 10.94s · Total 11.21s · 65 files · 1 compiler error · 1 finding in the full report.</text>
+<text x="30" y="445" fill="#8d9ab2" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="15">Use --verbose to see them.</text>
+<text x="30" y="513" fill="#8d9ab2" font-family="monospace" font-size="12">Recorded run of the TanStack form issue 1474 repro, TypeScript 5.9.3. Timings vary; costs are upper bounds, not savings.</text></svg>

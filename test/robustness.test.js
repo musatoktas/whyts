@@ -89,7 +89,7 @@ test('compiler errors are summarized with first errors, code distribution and de
   assert.equal(summary.measurementMayBeInvalid, true);
   assert.equal(parseCompilerErrors('a.ts(1,1): error TS2322: bad\nb.ts(1,1): error TS2307: gone').measurementMayBeInvalid, true); // exactly half
   assert.equal(parseCompilerErrors('a.ts(1,1): error TS2322: bad\nb.ts(1,1): error TS2322: bad\nc.ts(1,1): error TS2307: gone').measurementMayBeInvalid, false);
-  assert.deepEqual(parseCompilerErrors('Files: 3\n'), { total: 0, first: [], codes: [], missingDependencyErrors: 0, measurementMayBeInvalid: false });
+  assert.deepEqual(parseCompilerErrors('Files: 3\n'), { total: 0, first: [], codes: [], missingDependencyErrors: 0, measurementMayBeInvalid: false, excessiveDepth: [] });
   assert.equal(parseCompilerErrors('error TS18003: none').first[0].file, null);
 });
 
@@ -103,7 +103,7 @@ test('real compiler errors reach the report, JSON and warnings', async t => {
   assert.ok(report.compilerErrors.codes.some(c => c.code === 'TS2307'));
   assert.equal(report.compilerErrors.measurementMayBeInvalid, true);
   assert.ok(report.warnings.some(w => /unresolved modules/.test(w)));
-  const text = renderReport(report);
+  const text = renderReport(report, false, { verbose: true });
   assert.match(text, /Error codes: TS2307 x2/);
   assert.match(text, /main\.ts:1:\d+  TS2307/);
   assert.match(text, /WARNING: 2 of 3 errors are unresolved modules/);
@@ -154,7 +154,7 @@ test('wall time and the trace type dump are reported separately from the compile
   const report = await analyze({ project: simple(t), typescript: tsc });
   assert.equal(report.summary.dumpTypesSeconds, 2.5);
   assert.ok(report.summary.wallMilliseconds >= 400);
-  const text = renderReport(report);
+  const text = renderReport(report, false, { verbose: true });
   assert.match(text, /Compiler: 1\.50s · Check: 1\.00s/);
   assert.match(text, /Process wall time: \d+\.\d\ds · Trace type dump: 2\.50s \(not included in Compiler total\)/);
 });
@@ -215,9 +215,9 @@ test('inclusive intervals get a check-time share upper bound, null when Check ti
   assert.ok(report.diagnostics['Check time'].value > 0);
   assert.equal(typeof report.hotspots[0].checkTimeShareUpperBoundPercent, 'number');
   assert.equal(typeof report.projectHotspots[0].checkTimeShareUpperBoundPercent, 'number');
-  assert.match(renderReport(report), /\(at most [\d.]+% of Check\)/);
+  assert.match(renderReport(report, false, { verbose: true }), /\(at most [\d.]+% of Check\)/);
   const chain = { file: 'a.ts', line: 1, character: 1, milliseconds: 40, memberCount: 1, comparisons: [], checkTimeShareUpperBoundPercent: 20 };
-  const text = renderReport(emptyReport([{ rule: 'source-check-chain', confidence: 'measured', title: 'chain', evidence: chain, suggestion: 's' }]));
+  const text = renderReport(emptyReport([{ rule: 'source-check-chain', confidence: 'measured', title: 'chain', evidence: chain, suggestion: 's' }]), false, { verbose: true });
   assert.match(text, /at most 20% of Check time \(upper bound, not a predicted saving; inclusive interval measured under tracing\)/);
 });
 
@@ -236,7 +236,7 @@ test('test and spec roots are counted, not listed, in review-root-files', t => {
   assert.deepEqual(finding.evidence.files, ['generated/x.ts']);
   assert.equal(finding.evidence.testRootsExcluded, 4);
   assert.equal(finding.evidence.count, 1);
-  assert.match(renderReport(emptyReport([finding])), /not listed: 4 test\/spec roots/);
+  assert.match(renderReport(emptyReport([finding]), false, { verbose: true }), /not listed: 4 test\/spec roots/);
   const onlyTests = fixture(t, { compilerOptions: options, include: ['**/*'] }, { 'main.ts': 'export const m = 1;', 'a.test.ts': 'export {};', 'tests/c.ts': 'export {};' });
   const p2 = readProject(onlyTests, ts);
   assert.equal(inspectProject(buildGraph(ts, p2), p2).some(f => f.rule === 'review-root-files'), false);

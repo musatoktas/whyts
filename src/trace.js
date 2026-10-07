@@ -7,11 +7,12 @@ const names = new Set(['checkSourceFile', 'structuredTypeRelatedTo', ...sourceCh
 
 // Complete events can be written at the end of a span, out of timestamp order.
 // Begin/end stacks belong to a process/thread, never to the whole trace.
-export function traceSpans(events) {
+export function traceSpans(events, wanted = names) {
   const stacks = new Map(), spans = [];
-  const record = (event, end) => {
-    if (names.has(event.name) && Number.isFinite(event.ts) && Number.isFinite(end) && end >= event.ts) {
-      spans.push({ ...event, end, thread: `${event.pid}:${event.tid}` });
+  // endArgs: native (TypeScript 7) traces write some results on the end event.
+  const record = (event, end, endArgs) => {
+    if (wanted.has(event.name) && Number.isFinite(event.ts) && Number.isFinite(end) && end >= event.ts) {
+      spans.push({ ...event, end, ...(endArgs ? { endArgs } : {}), thread: `${event.pid}:${event.tid}` });
     }
   };
   for (const event of events) {
@@ -22,7 +23,7 @@ export function traceSpans(events) {
       stacks.get(thread).push(event);
     } else if (event.ph === 'E') {
       const start = stacks.get(thread)?.pop();
-      if (start) record(start, event.ts);
+      if (start) record(start, event.ts, event.args);
     }
   }
   return spans;
@@ -60,7 +61,7 @@ export function traceHotspots(events, base) {
 }
 
 // TypeScript trace paths can use canonical casing on case-insensitive hosts.
-const findSource = (file, graph) => graph?.files.get(file) ?? graph?.program.getSourceFile(file) ??
+export const findSource = (file, graph) => graph?.files.get(file) ?? graph?.program.getSourceFile(file) ??
   (graph?.native ? graph.lowerFiles?.get(file.toLowerCase()) : undefined);
 
 // Native (Go) trace offsets are UTF-8 byte offsets; 5.x/6.x and this tool's AST use UTF-16 code units.
@@ -243,6 +244,12 @@ export function traceDetails(events, descriptors, base, graph = null) {
   const files = fileIntervals(spans, base, graph);
   return { hotspots: files.slice(0, 5),
     projectHotspots: fileIntervals(spans, base, graph, file => scope(file, graph) === 'project').slice(0, 5), sourceHotspots, sourceGroups, typeHotspots };
+}
+
+// Resolve one type id to a label and declaration, with the same rules as the comparison lists.
+export function typeDescriber(descriptors, base, graph = null) {
+  const types = new Map(descriptors.map(type => [type.id, type]));
+  return id => describeType(id, types, base, graph);
 }
 
 export function selectedTypeIds(details) {

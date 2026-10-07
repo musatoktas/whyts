@@ -1,0 +1,411 @@
+{
+ "note": "Real getVariancesWorker events of typescript 7.0.2 (linux-x64, --checkers 1) for a six-line project with Box<T> and Pair<A, B>. The native trace writes begin and end events, and the variances are on the end event.",
+ "events": [
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 134134.353,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 3187
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 134233.112,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 6086
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 134286.402,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 744
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 134541.501,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 744,
+    "variances": [
+     "out"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 134565.311,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 3977
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 134585.621,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 3977,
+    "variances": [
+     "out"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 134593.341,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 3982
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 134686.35,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 3982,
+    "variances": [
+     "out"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 134735.64,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 6086,
+    "variances": [
+     "out"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 134787.211,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 2,
+    "checkerId": 0,
+    "id": 3987
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 134831.091,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 3991
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 134866.35,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 6211
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 134960.43,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 6211,
+    "variances": [
+     "[bivariant]"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 134987.72,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 3991,
+    "variances": [
+     "[bivariant]"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 135145.259,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 6256
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 135277.988,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 6299
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 135299.558,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 6299,
+    "variances": [
+     "out"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 135391.358,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 6256,
+    "variances": [
+     "out"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 135456.537,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 2,
+    "checkerId": 0,
+    "id": 3987,
+    "variances": [
+     "out",
+     "[bivariant]"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 135470.107,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 3187,
+    "variances": [
+     "out"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 225768.139,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 0,
+    "checkerId": 0,
+    "id": 2120
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 225779.879,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 0,
+    "checkerId": 0,
+    "id": 2120,
+    "variances": []
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 235128.375,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 17156
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 235311.085,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 17156,
+    "variances": [
+     "out"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 395483.882,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 28298
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 395505.762,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 1,
+    "checkerId": 0,
+    "id": 28298,
+    "variances": [
+     "out"
+    ]
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "checkTypes",
+   "ts": 396027.17,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 2,
+    "checkerId": 0,
+    "id": 28319
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "checkTypes",
+   "ts": 396082.81,
+   "name": "getVariancesWorker",
+   "args": {
+    "arity": 2,
+    "checkerId": 0,
+    "id": 28319,
+    "variances": [
+     "out",
+     "out"
+    ]
+   }
+  }
+ ]
+}
