@@ -486,7 +486,7 @@ export async function timedRun(project, compiler, options = {}) {
     if (check === undefined || total === undefined) throw new Error(`Compiler produced no Check time or Total time. ${clean((run.stderr || run.stdout).slice(0, 2000))}`);
     const errors = parseCompilerErrors(run.stdout, 0, project.base);
     return { checkSeconds: check, totalSeconds: total, files: diagnostics.Files?.value ?? null, exitCode: run.exitCode,
-      errorCount: errors.total, measurementMayBeInvalid: errors.measurementMayBeInvalid, missingDependencyErrors: errors.missingDependencyErrors };
+      errorCount: errors.total, errorCodes: errors.codes, measurementMayBeInvalid: errors.measurementMayBeInvalid, missingDependencyErrors: errors.missingDependencyErrors };
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
 

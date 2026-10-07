@@ -27,14 +27,36 @@ export function checkCompatibility(a, b) {
   return { errors, warnings };
 }
 
+// A side with compiler errors can stop its work early. Two sides do the same work only when both have no errors or both have the same errors.
+// A side is { exitCodes, errors: { count, codes: [{ code, count }] } | null }.
+const sameErrors = (a, b) => a.errors.count === b.errors.count && sameList(a.errors.codes ?? [], b.errors.codes ?? []);
+const errorText = side => {
+  const count = side.errors?.count;
+  const codes = (side.errors?.codes ?? []).slice(0, 3).map(c => c.code);
+  return count ? `${count} compiler error${count === 1 ? '' : 's'}${codes.length ? ` (${codes.join(', ')})` : ''}` : 'compiler errors';
+};
+export function judgeComparability(a, b) {
+  const failed = side => (side.exitCodes ?? []).some(code => code !== 0);
+  const failedA = failed(a), failedB = failed(b);
+  if (!failedA && !failedB) return { comparable: true, reason: null };
+  if (failedA && failedB) {
+    // Both sides fail. Their timings stay comparable when the errors are the same. Without error data, whyts cannot tell.
+    if (!a.errors || !b.errors || sameErrors(a, b)) return { comparable: true, reason: null };
+    return { comparable: false, reason: `The two sides report different compiler errors (baseline: ${errorText(a)}; candidate: ${errorText(b)}). They did not do the same work. Timings are not comparable.` };
+  }
+  const [name, side] = failedA ? ['baseline', a] : ['candidate', b];
+  return { comparable: false, reason: `The ${name} stopped with ${errorText(side)}. Timings are not comparable.` };
+}
+
 function assemble(mode, a, b, extra = {}) {
   const compatibility = checkCompatibility(a, b);
   if (compatibility.errors.length) throw new Error(`These two sides cannot be compared.\n${compatibility.errors.map(e => `  ${e}`).join('\n')}`);
-  const metric = key => ({ unit: 's', baseline: a[key], candidate: b[key], ...judge(a[key], b[key]) });
+  const { comparable, reason } = judgeComparability(a, b);
+  const metric = key => ({ unit: 's', baseline: a[key], candidate: b[key], ...(comparable ? judge(a[key], b[key]) : { ...judge(null, null), verdict: 'not-comparable' }) });
   const warnings = [...compatibility.warnings, ...(extra.warnings ?? [])];
   const strip = side => ({ typescriptVersion: side.typescriptVersion, compiler: side.compiler, checkers: side.checkers ?? null, project: side.project,
-    programFiles: side.programFiles ?? null, flags: side.flags ?? null, timingMode: side.timingMode, compilerExitCodes: side.exitCodes ?? [] });
-  return { schemaVersion: 1, kind: 'comparison', toolVersion, mode, baseline: strip(a), candidate: strip(b),
+    programFiles: side.programFiles ?? null, flags: side.flags ?? null, timingMode: side.timingMode, compilerExitCodes: side.exitCodes ?? [], compilerErrors: side.errors ?? null });
+  return { schemaVersion: 1, kind: 'comparison', toolVersion, mode, baseline: strip(a), candidate: strip(b), comparable, reason,
     checkTime: metric('checkTime'), totalTime: metric('totalTime'), ...extra.fields, warnings };
 }
 
@@ -57,6 +79,7 @@ function reportSide(report) {
     project: clean(report.project ?? ''), programFiles: timings?.compilerFiles ?? report.summary.programFiles ?? null,
     flags: timings?.flags ?? null, timingMode: timings ? timings.mode : 'traced single run', toolVersion: String(report.toolVersion),
     exitCodes: timings ? timings.compilerExitCodes : [report.summary.compilerExitCode],
+    errors: report.compilerErrors && Number.isFinite(report.compilerErrors.total) ? { count: report.compilerErrors.total, codes: report.compilerErrors.codes ?? [] } : null,
     checkTime: timings ? timings.checkTime : one('Check time'), totalTime: timings ? timings.totalTime : one('Total time')
   };
 }
@@ -148,7 +171,9 @@ export async function compareProjects(options) {
     const result = await timedRun(side.project, side.compiler, { timeoutMs: options.timeoutMs, maxOldSpaceMb: options.maxOldSpaceMb });
     if (step.warmup) warmup[step.side] = result; else measured[step.side].push(result);
   }
-  const side = name => ({ ...described[name], programFiles: measured[name][0]?.files ?? null, exitCodes: measured[name].map(r => r.exitCode),
+  // The errors of a side come from its first run with errors. Runs of one project give the same errors.
+  const errorsOf = name => { const run = measured[name].find(r => r.errorCount > 0); return { count: run?.errorCount ?? 0, codes: run?.errorCodes ?? [] }; };
+  const side = name => ({ ...described[name], programFiles: measured[name][0]?.files ?? null, exitCodes: measured[name].map(r => r.exitCode), errors: errorsOf(name),
     checkTime: summarize(measured[name].map(r => r.checkSeconds)), totalTime: summarize(measured[name].map(r => r.totalSeconds)) });
   const warnings = [];
   const different = optionDifferences(sides.baseline, sides.candidate);

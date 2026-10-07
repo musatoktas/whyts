@@ -1,3 +1,46 @@
+# v0.7.1 validation
+
+0.7.1 fixes one fault of `whyts compare`. A side with compiler errors can stop early, and its time is then short. 0.7.0 showed this as a speed difference. 0.7.1 calls the sides not comparable. It adds no feature.
+
+Done on 2026-10-07 (Dubai time) with Node.js 24.21.0 on Linux x64. The live runs started at 14:37, 14:37 and 14:38. The bench had other jobs, with a load average below 2 at the start. All times are Check times of untraced runs. Output files are on the bench in `/opt/whyts-v071-out`.
+
+## Tests
+
+| Compiler | Result |
+| --- | --- |
+| TypeScript 5.9.3 | 95 tests, 94 passed, 1 skipped (the real TypeScript 7 test) |
+| TypeScript 5.9.3 and `WHYTS_TS7` (7.0.2) | 95 tests, 95 passed |
+| TypeScript 6.0.3 and `WHYTS_TS7` (7.0.2) | 95 tests, 95 passed |
+
+The 90 tests of 0.7.0 pass without change in their meaning. Two of them changed: they used a failing side and a clean side, and they now expect `not-comparable`. We added 5 tests: a failing baseline with a clean candidate, the same errors on both sides, two clean sides, the offline rule, and the rule as a pure function.
+
+Mutation check. We changed `src/compare.js` three times and ran all tests. Each change was reverted.
+
+| Change | Failed tests |
+| --- | --- |
+| The sides are always comparable | 5 |
+| Equal errors count as different errors | 4 |
+| Only the error count is compared, not the error codes | 1 |
+
+## Real projects
+
+Compiler: TypeScript 5.9.3. Ten measured runs for each side, order ABBA. The baseline has one TS2589 error. The candidate has none.
+
+| Project | 0.7.0 | 0.7.1 |
+| --- | --- | --- |
+| typeorm 8559 reproduction (baseline: master c64a1f0; candidate: the fix commit 238041f) | Check 0.05 s and 0.13 s: "+160%, the candidate is slower" | `not-comparable`, Check 0.05 s and 0.13 s shown, exit code 1 |
+| TanStack Form 1474 reproduction (baseline: 2216fde; candidate: the fix commit 4fa8090) | Check 7.415 s and 0.06 s: "-99.2%, the candidate is faster" | `not-comparable`, Check 7.415 s and 0.06 s shown, exit code 1 |
+
+The 0.7.1 text for both is: `NOT COMPARABLE: The baseline stopped with 1 compiler error (TS2589). Timings are not comparable.`
+
+We built the typeorm reproduction again for this check. It has 166 files. The reproduction of the 0.7.0 work had 231 files, so its times differ. A clean project compared with itself gave `within-noise`.
+
+## Not verified
+
+- A pair where both sides have different errors was tested only with the fake compiler, not with a real project.
+- A report from before 0.7 may have no error data. Then a clean side still decides, and two failing sides stay comparable. We did not test an old report file.
+- We did not test TypeScript 7 for the live comparison of failing sides.
+
 # v0.7.0 validation
 
 Done on 2026-10-07 (Dubai time), from about 11:30 to 12:45, with Node.js 24.21.0 on Linux x64. The bench has 16 cores. Other jobs ran on it all the time. The load average was between 40 and 96 during part of the runs. All the times below are traced times. They are upper bounds and not benchmarks. This release makes no speed claim. Output files are on the bench in `/opt/whyts-v07-out`.

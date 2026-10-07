@@ -34,7 +34,7 @@ Options:
   -v, --version  Show version
 
 Paths for explain are relative to the tsconfig directory.
-compare exit codes: 0 when the comparison finished (a compiler error on one side prints a warning), 1 on a failure or a rejected comparison.
+compare exit codes: 0 when the comparison finished, 1 on a failure, a rejected comparison, or sides that are not comparable (compiler errors that differ between the sides).
 No source edits, network calls, lifecycle scripts, or emitted build outputs.
 Supports TypeScript 5.x and 6.x, and the native TypeScript 7 compiler (experimental;
 the traced run uses one checker, so type ids stay unambiguous).
@@ -100,6 +100,7 @@ try {
       result = await compareProjects(options);
     }
     process.stdout.write(options.json ? JSON.stringify(result, null, 2) + '\n' : renderComparison(result, options.color));
+    if (result.comparable === false) process.exitCode = 1;
   } else {
     if (options.runs > 1) options.onRun = ({ run, runs }) => process.stderr.write(`whyts: untraced timing run ${run} of ${runs}\n`);
     if (!options.file && process.stderr.isTTY) process.stderr.write('Inspecting the TypeScript program and running a fresh traced check…\n');
