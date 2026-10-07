@@ -3,13 +3,13 @@
   "name": "io.github.musatoktas/whyts",
   "description": "Find out why a TypeScript project is slow: measured analysis and before/after comparison.",
   "repository": { "url": "https://github.com/musatoktas/whyts", "source": "github" },
-  "version": "0.8.1",
+  "version": "0.8.2",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "whyts-mcp",
-      "version": "0.8.1",
+      "version": "0.8.2",
       "runtimeHint": "npx",
       "transport": { "type": "stdio" }
     }

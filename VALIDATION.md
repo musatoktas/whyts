@@ -1,3 +1,11 @@
+# v0.8.2 validation
+
+0.8.2 changes no code. It changes the release workflows only.
+
+- `mcp-registry.yml` downloads `mcp-publisher` v1.8.1 from a fixed release URL and checks its SHA-256 sum (`registry_1.8.1_checksums.txt`) before it runs. Before, it downloaded the latest release without a check.
+- `release.yml` and `mcp-registry.yml` do not set `package-manager-cache`. `actions/setup-node@v4` does not know this input and printed a warning.
+- `whyts`, `whyts-mcp` and `server.json` have the version 0.8.2. This is the first release that publishes `whyts-mcp` from GitHub Actions with trusted publishing.
+
 # v0.8.1 validation
 
 0.8.1 adds the package `whyts-mcp` and the MCP Registry file `server.json`. It changes no analysis. `whyts` and `whyts-mcp` both have the version 0.8.1.

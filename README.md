@@ -19,7 +19,7 @@ Requires Node.js 20+ and a TypeScript project with dependencies installed.
 npx whyts --project .
 ```
 
-For repeatable runs, pin a version: `npx whyts@0.8.1 --project .`
+For repeatable runs, pin a version: `npx whyts@0.8.2 --project .`
 
 To run from a checkout:
 
@@ -328,7 +328,7 @@ The server runs the TypeScript compiler of the project that you name, as `tsc` d
 
 The MCP packages (`@modelcontextprotocol/server` and `zod`) are not dependencies of whyts. `npm install whyts` installs only `typescript`, as before. The package `whyts-mcp` has the same version as `whyts` and depends on that exact version. The command `whyts mcp` still works. If the MCP packages are missing, it prints `npx -y whyts-mcp`.
 
-Alternative, if you want to start the server from the `whyts` package: `npx -y -p whyts@0.8.1 -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp`.
+Alternative, if you want to start the server from the `whyts` package: `npx -y -p whyts@0.8.2 -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp`.
 
 ## Options for large projects
 

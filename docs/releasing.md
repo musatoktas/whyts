@@ -10,6 +10,8 @@ whyts is published as two npm packages, `whyts` and `whyts-mcp`. They always hav
 
 ## First publish of whyts-mcp (once)
 
+This step was done for 0.8.1 on 2026-10-07. npm added a trusted publisher for `whyts-mcp` (`musatoktas/whyts`, `release.yml`). The first release from GitHub Actions after that validates the configuration. The text below records how the first publish was done.
+
 npm documents trusted publishing for a package, and its documentation does not say that you can set it up before the package exists. So the first publish of `whyts-mcp` is done by hand. Until then, `release.yml` prints a warning and skips `whyts-mcp` and the registry step. It does not fail.
 
 1. Merge the pull request. Publish the release `v0.8.1`. `release.yml` publishes `whyts@0.8.1` and warns about `whyts-mcp`.
