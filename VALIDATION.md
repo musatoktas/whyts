@@ -2,7 +2,7 @@
 
 0.8.1 adds the package `whyts-mcp` and the MCP Registry file `server.json`. It changes no analysis. `whyts` and `whyts-mcp` both have the version 0.8.1.
 
-Measured on 2026-10-07 (Dubai time, about 22:35 to 22:40) in GitHub Actions on pull request 14: the workflows `ci.yml` and `validate-0.8.1.yml` (Linux, Node.js 24). Nothing ran on a personal machine or on the bench for this section. Nothing was published to npm or to the MCP Registry.
+Measured on 2026-10-07 (Dubai time, about 22:35 to 22:40) in GitHub Actions on pull request 14: the workflows `ci.yml` and `validate-0.8.1.yml` (Linux, Node.js 24). The numbers in this section come from the logs of those runs. Nothing was published to npm or to the MCP Registry.
 
 ## Why a second package
 
