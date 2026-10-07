@@ -1,3 +1,112 @@
+# v0.8.0 validation
+
+0.8.0 adds `whyts mcp`, a Model Context Protocol server with the tools `analyze`, `compare` and `explain`, and a short instruction file for agents (`docs/agents.md`). It changes no analysis. The tools call the same functions as the CLI and shorten the JSON.
+
+Done on 2026-10-07 (Dubai time), from about 14:55 to 16:15, with Node.js 24.21.0 on Linux x64. The bench had other jobs, and 20 GB of memory was available at the start. Output files are on the bench in `/opt/whyts-v08-out`. The times of the real runs are Check times of untraced runs, unless the text says traced.
+
+## Dependency decision
+
+We measured three ways to add the official MCP SDK. Installs went into clean directories with `--ignore-scripts`. The counts come from `npm ls --all --parseable` (the whyts package is counted).
+
+| Install | Packages | Unpacked on disk |
+| --- | --- | --- |
+| whyts 0.7.1 | 2 | 23,648 KB |
+| whyts 0.8.0, default | 5 | 39,944 KB (+16,296 KB, +69%) |
+| whyts 0.8.0, `npm install --omit=optional` | 2 | 23,680 KB (+32 KB) |
+| `typescript` and `@modelcontextprotocol/sdk` 1.32.1 (no whyts) | 95 | 52,496 KB (typescript alone: 1 package, 23,464 KB) |
+| `typescript`, `@modelcontextprotocol/server` 2.3.1 and `zod` 4.6.5 (no whyts) | 4 | 39,728 KB |
+
+The whyts tarball grows from 47,297 bytes to 56,742 bytes. The compressed downloads of the new packages are 1,537,977 bytes (`server`), 154,829 bytes (`core`) and 1,052,733 bytes (`zod`). The `typescript` 5.9.3 download is 4,377,468 bytes.
+
+Choice: option (b). The server uses `@modelcontextprotocol/server` 2.x, and `zod`, as `optionalDependencies`. `whyts mcp` loads them with a dynamic `import()`. The CLI does not load them for any other command. Reasons:
+
+- The SDK 1.x package has 94 more packages. The 2.x `server` package has two dependencies (`zod` and its own `core`). The documentation of the SDK calls 2.x the stable line, and the npm `latest` tag of `@modelcontextprotocol/server` is 2.3.1. The `serveStdio` function of 2.x serves clients of both protocol revisions (2025-11-25 and 2026-07-28).
+- One package keeps one release process. Option (c), a second package, needs its own npm trusted publisher setup and a first manual publish.
+- The cost for an analysis user is real: a default install grows by 3 packages and 16 MB on disk. An optional dependency does not remove it. A user who does not want it runs `npm install --omit=optional`. Then `whyts mcp` prints one clear error. Option (c) would give no growth at all. It stays open if the 16 MB is not acceptable.
+
+## Facts from the documentation
+
+- MCP specification, lifecycle, timeouts: "Implementations SHOULD establish timeouts for all sent requests". A client MAY reset the clock on a progress notification, and SHOULD always enforce a maximum timeout.
+- MCP specification, progress: the server MAY send `notifications/progress` for a request that carries a `progressToken`; `progress` MUST increase with each notification. whyts drops a value that does not increase.
+- Claude Code documentation: the per-server `timeout` is a hard wall-clock limit, and progress notifications do not extend it. Its output limit is 25,000 tokens by default, with a warning at 10,000.
+- Codex documentation: `tool_timeout_sec` is 60 seconds and `startup_timeout_sec` is 10 seconds by default. The README tells users to raise both.
+- Cursor documentation names no tool timeout. The documentation of VS Code names none either.
+- The client configuration forms in the README are copied from the documentation of each client (Claude Code `claude mcp add`, Cursor `.cursor/mcp.json`, VS Code `.vscode/mcp.json`, Codex `codex mcp add` and `config.toml`).
+
+## Tests
+
+| Compiler | Result |
+| --- | --- |
+| TypeScript 5.9.3 | 119 tests, 118 passed, 1 skipped (the real TypeScript 7 test) |
+| TypeScript 5.9.3 and `WHYTS_TS7` (7.0.2) | 119 tests, 119 passed |
+| TypeScript 6.0.3 and `WHYTS_TS7` (7.0.2) | 119 tests, 119 passed |
+
+The 95 tests of 0.7.1 pass without change. We added 24 tests in `test/mcp.test.js`. They cover the compact result shape, the cap of 5 diagnoses and 5 measured findings, the character limit, the three decisions of `compare`, the error kinds, one call at a time, progress values that grow, cancellation, and a raw stdio client against `whyts mcp` (a client of 2025-11-25 and a client of 2026-07-28 without a handshake). The error paths run through the real server: a missing project, an unsupported TypeScript (a fake 4.9.5 package) and a timeout (`timeoutSeconds` 0.05). With `npm ci --omit=optional`, the 9 server tests skip and the other 15 pass.
+
+Mutation check. We changed `src/mcp-tools.js` or `src/mcp.js` 14 times and ran `test/mcp.test.js`. Each change was reverted.
+
+| Change | Failed tests |
+| --- | --- |
+| Calls do not wait for each other | 2 (one of them hung until the test timeout in the first run) |
+| No limit on the result size | 2 |
+| 50 diagnoses instead of 5 | 1 |
+| 50 findings instead of 5 | 1 |
+| A result with compiler errors counts as comparable | 1 |
+| The timeout error has no own kind | 2 |
+| The progress value of a compare run does not stay below the next step | 1 |
+| A cancelled running call does not stop the compiler | 1 |
+| A cancelled waiting call stops the running compiler | 1 |
+| The abort signal is not connected | 2 (the cancel test and the stdin test) |
+| The result keeps the relative project path | 1 |
+| Progress notifications without a progress token | 1 |
+| `compare` accepts 1 run | 1 |
+| The result has no `direction` | 2 |
+
+Two changes were not caught at first. A cap of 50 diagnoses and a cap of 50 findings passed, because the size limit shortened the result to 3 anyway. We added a test with small entries, and both are caught now. A stop of the compiler in the stdin handler also passed: the SDK already aborts the running requests when stdin closes. We removed that duplicate code. The stdin test now checks that the compiler process is gone.
+
+## Real MCP client: MCP Inspector
+
+Client: `@modelcontextprotocol/inspector` 2.9.0, CLI mode. The 2.x package has the binary `mcp-inspector`; the form is `mcp-inspector --cli <command and arguments> --method <method> --tool-name <name> --tool-arg key=value ...`. The server was the packed `whyts-0.8.0.tgz`, installed with its optional dependencies in a clean directory.
+
+| Call | Result |
+| --- | --- |
+| `tools/list` | `analyze`, `compare`, `explain`, 6,048 bytes with the schemas |
+| `analyze` on `examples/type-comparison`, `runs=3` | 1,607 characters, wall 2.0 s, Check 0.04 s (median of 3 untraced runs), 1 measured finding, `diagnoses: []` |
+| `analyze` on `examples/barrel` | wall 2.2 s, 0 measured findings, 3 structural findings (`barrel-reach`, `broad-include`, `review-root-files`) |
+| `analyze` on the TanStack Form 1474 reproduction | 2,051 characters, wall 14.4 s |
+| `compare`, synthetic pair, `runs=5` | `separated`, `faster`, 1,170 characters, wall 4.9 s |
+| `explain` on `examples/barrel`, `src/shared/clamp.ts` | 369 bytes, chain `src/shared/clamp.ts`, importer `src/shared/index.ts` |
+| `analyze` on a missing project | `isError`, kind `not-found`; the Inspector exits with 5 |
+
+The TanStack reproduction (the `k.ts` of the earlier work, with `util-types.ts` of form-core commit 2216fde) gave the diagnosis in the MCP answer:
+
+```
+"summary":{"checkTime":{"seconds":10.38,"source":"one traced run (tracing inflates it)"},"files":65,"compilerExitCode":2,"errorCount":1,"comparableWithCompare":false}
+"diagnoses":[{"pattern":"recursive-type-instantiation","confidence":"measured","title":"Recursive type instantiation: DeepKeys<Values>","location":"k.ts:4:17",
+ "evidence":["TS2589 at this place: ...","It hit the instantiation limit inside DeepKeysAndValuesImpl (../src/util-types.ts:151).",
+ "DeepKeysAndValuesImpl refers to itself: DeepKeysAndValuesImpl -> DeepKeyAndValueArray -> DeepKeysAndValuesImpl.","Type argument JsonData (k.ts:2): JsonData refers to itself."],
+ "remedy":"Stop the expansion of DeepKeysAndValuesImpl when it meets a type it already visited. ..."}]
+```
+
+The `compare` call used two synthetic projects that we wrote for this check: the same assignment of a 20-letter route type, with three-letter routes (8,000 properties) as the baseline and two-letter routes (400 properties) as the candidate. It is not a fix of a real bug. The answer:
+
+```
+"decision":"separated","direction":"faster","runsPerSide":5,"order":"ABBAABBAAB",
+"checkTime":{"baseline":{"median":0.21,"min":0.2,"max":0.22},"candidate":{"median":0.03,"min":0.03,"max":0.04},"deltaMilliseconds":-180,"deltaPercent":-85.7,"verdict":"separated","direction":"faster"}
+```
+
+The `compare` over stdio with the scripted compiler (a fast candidate, and a candidate with TS2322) returned `separated` and `not-comparable` in the tests.
+
+## Not verified
+
+- We did not run Claude Code, Cursor, Codex or GitHub Copilot against the server. The setup forms in the README come from their documentation.
+- We do not know which clients show progress notifications, or which of them reset a timeout on progress. The Inspector CLI shows none. The progress notifications were checked with a raw client in the tests, in both protocol eras.
+- No real run lasted longer than 15 seconds, so we did not see a heartbeat notification from a real compiler. The heartbeat is tested with a 10 to 20 ms interval and a fake engine.
+- Client cancellation (`notifications/cancelled`) was tested through the abort signal of `runTool` and through a closed stdin, not through a real client. The stop of the compiler uses the SIGTERM listener that the engine adds while a compiler runs.
+- We did not run a multi-minute project through the server, and we did not run a native TypeScript 7 project through the MCP tools. The server tests use the 5.9.3 and 6.0.3 compilers and a fake compiler.
+- We measured the result size in characters (at most 12,000), not in tokens.
+- CI on Windows and macOS: see the pull request.
+
 # v0.7.1 validation
 
 0.7.1 fixes one fault of `whyts compare`. A side with compiler errors can stop early, and its time is then short. 0.7.0 showed this as a speed difference. 0.7.1 calls the sides not comparable. It adds no feature.
