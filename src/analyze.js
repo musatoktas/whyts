@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { traceDetails, selectedTypeIds, resolveTraceTypes } from './trace.js';
 import { readTypeDescriptors } from './types.js';
+import { buildTimings } from './timing.js';
 export { traceHotspots } from './trace.js';
 
 const require = createRequire(import.meta.url);
@@ -447,6 +448,57 @@ export function fileCountWarning(graphFiles, nativeFiles, tolerance = FILE_COUNT
   return `The import graph has ${graphFiles} files, and the native compiler reports ${nativeFiles} files. Module resolution may differ between the two compilers. Import graph findings and source positions may be incomplete or wrong for this project.`;
 }
 
+// Arguments for one compiler run. Keep project incremental/composite semantics; isolate cache and all trace output.
+// Native checking is parallel by default (4 checkers) and every checker numbers its own types in its own types_<n>.json.
+// One checker keeps type ids unambiguous and the trace comparable with 5.x/6.x. Several checkers would need checkerId-qualified ids.
+// Timing runs (no traceDir) use the same flags and the same one checker, so a timing and a chain time describe the same work.
+// The default parallel run would add scheduling noise, and it would not match the traced run the findings come from.
+export function compilerArgs(project, compiler, cacheFile, traceDir = null) {
+  const args = ['--project', project.configPath, '--noEmit', '--emitDeclarationOnly', 'false',
+    '--incremental', '--tsBuildInfoFile', cacheFile, '--extendedDiagnostics', '--pretty', 'false'];
+  if (traceDir) args.push('--generateTrace', traceDir);
+  if (compiler.native) args.push('--checkers', '1');
+  return args;
+}
+
+// The flags of a timing run without paths. Two timing series are only comparable when these lists are equal.
+export function timingFlags(compiler, maxOldSpaceMb) {
+  return ['--noEmit', '--emitDeclarationOnly=false', '--incremental', '--extendedDiagnostics', '--pretty=false',
+    ...(compiler.native ? ['--checkers=1'] : []), ...(!compiler.native && maxOldSpaceMb ? [`--max-old-space-size=${maxOldSpaceMb}`] : [])];
+}
+
+// One untraced run with its own new incremental cache, so every run checks the whole program.
+export async function timedRun(project, compiler, options = {}) {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-time-'));
+  try {
+    const run = await runCompiler(compiler.tscPath, compilerArgs(project, compiler, path.join(temporary, 'cache.tsbuildinfo')), project.base, {
+      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_SECONDS * 1000, maxOldSpaceMb: compiler.native ? undefined : options.maxOldSpaceMb,
+      onProgress: options.onProgress, progressIntervalMs: options.progressIntervalMs });
+    const diagnostics = parseDiagnostics(run.stdout);
+    const check = diagnostics['Check time']?.value, total = diagnostics['Total time']?.value;
+    if (check === undefined || total === undefined) throw new Error(`Compiler produced no Check time or Total time. ${clean((run.stderr || run.stdout).slice(0, 2000))}`);
+    const errors = parseCompilerErrors(run.stdout, 0, project.base);
+    return { checkSeconds: check, totalSeconds: total, files: diagnostics.Files?.value ?? null, exitCode: run.exitCode,
+      errorCount: errors.total, measurementMayBeInvalid: errors.measurementMayBeInvalid, missingDependencyErrors: errors.missingDependencyErrors };
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+}
+
+// Repeated untraced runs after the traced run. The traced run has already read every file, so the file cache is warm.
+async function repeatedTimings(project, compiler, options) {
+  const runs = [];
+  for (let i = 0; i < options.runs; i++) {
+    options.onRun?.({ run: i + 1, runs: options.runs });
+    runs.push(await timedRun(project, compiler, options));
+  }
+  const timings = buildTimings({ checkValues: runs.map(r => r.checkSeconds), totalValues: runs.map(r => r.totalSeconds),
+    exitCodes: runs.map(r => r.exitCode), files: runs[0].files, flags: timingFlags(compiler, options.maxOldSpaceMb), checkers: compiler.native ? 1 : null });
+  const warnings = [];
+  if (runs.some(r => r.exitCode !== 0)) warnings.push(`${runs.filter(r => r.exitCode !== 0).length} of ${runs.length} timing runs reported compiler errors. Fix errors before comparing timings.`);
+  if (runs.some(r => r.measurementMayBeInvalid)) warnings.push('Unresolved modules dominate the errors of the timing runs. Dependencies may be missing or not built, so these timings may not represent a healthy build.');
+  if (compiler.native) warnings.push('Timing runs used one checker (`--checkers 1`), like the traced run. Do not compare these timings with a default parallel `tsc` run.');
+  return { timings, warnings };
+}
+
 export async function analyze(options = {}) {
   const projectInput = path.resolve(options.project ?? '.');
   const compilerBase = fs.existsSync(projectInput) && fs.statSync(projectInput).isDirectory() ? projectInput : path.dirname(projectInput);
@@ -457,19 +509,14 @@ export async function analyze(options = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-'));
   try {
     const started = performance.now();
-    // Keep project incremental/composite semantics; isolate cache and all trace output.
-    const args = ['--project', project.configPath, '--noEmit', '--emitDeclarationOnly', 'false',
-      '--incremental', '--tsBuildInfoFile', path.join(temporary, 'cache.tsbuildinfo'),
-      '--extendedDiagnostics', '--pretty', 'false', '--generateTrace', temporary];
-    // Native checking is parallel by default (4 checkers) and every checker numbers its own types in its own types_<n>.json.
-    // One checker keeps type ids unambiguous and the trace comparable with 5.x/6.x. Several checkers would need checkerId-qualified ids.
-    if (compiler.native) args.push('--checkers', '1');
+    const args = compilerArgs(project, compiler, path.join(temporary, 'cache.tsbuildinfo'), temporary);
     const run = await runCompiler(compiler.tscPath, args, project.base, {
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_SECONDS * 1000, maxOldSpaceMb: compiler.native ? undefined : options.maxOldSpaceMb, onProgress: options.onProgress, progressIntervalMs: options.progressIntervalMs });
     const wallMilliseconds = performance.now() - started;
     const diagnostics = parseDiagnostics(run.stdout);
     const compilerErrors = parseCompilerErrors(run.stdout, 5, project.base);
     if (!Object.keys(diagnostics).length) throw new Error(`Compiler produced no diagnostics. ${clean((run.stderr || run.stdout).slice(0, 2000))}`);
+    const timed = options.runs > 1 ? await repeatedTimings(project, compiler, options) : null;
     const traceFile = path.join(temporary, 'trace.json');
     const trace = await readTrace(traceFile, temporary, project, graph, compiler.native);
     const checkSeconds = diagnostics['Check time']?.value;
@@ -486,11 +533,13 @@ export async function analyze(options = {}) {
       summary: { programFiles: graph.files.size, rootFiles: graph.roots.size, compilerExitCode: run.exitCode,
         errorCount: compilerErrors.total, wallMilliseconds, dumpTypesSeconds: diagnostics['Dump types time']?.value ?? null,
         mode: 'fresh-cache, no-emit, tracing enabled', analysisOverheadExcluded: true },
+      ...(timed ? { timings: timed.timings } : {}),
       diagnostics, compilerErrors, findings, hotspots, projectHotspots, sourceHotspots, sourceGroups, typeHotspots, typeDescriptors, warnings: [
         ...(compiler.native ? [NATIVE_EXPERIMENTAL_WARNING, NATIVE_ONE_CHECKER_WARNING] : []),
         compiler.native && options.maxOldSpaceMb ? NATIVE_HEAP_WARNING : null,
         compiler.native ? fileCountWarning(graph.files.size, diagnostics.Files?.value) : null,
         ...traceWarnings,
+        ...(timed?.warnings ?? []),
         project.parsed.projectReferences?.length ? 'Referenced projects are not built; existing declaration outputs may be required.' : null,
         graph.skipped.length ? `Import analysis skipped ${graph.skipped.length} file${graph.skipped.length === 1 ? '' : 's'} (${graph.skipped.slice(0, 3).map(f => f.file).join(', ')}${graph.skipped.length > 3 ? ', ...' : ''}); import graph findings may be incomplete.` : null,
         compilerErrors.measurementMayBeInvalid ? `${compilerErrors.missingDependencyErrors} of ${compilerErrors.total} compiler errors are unresolved modules or type declarations (${[...moduleErrorCodes].join(', ')}). Dependencies may be missing or not built, so these timings may not represent a healthy build.` : null,
