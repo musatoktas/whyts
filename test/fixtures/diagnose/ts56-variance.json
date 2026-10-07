@@ -1,0 +1,175 @@
+{
+ "note": "Real getVariancesWorker events of drizzle-orm 15454db with TypeScript 5.6.3: two outer events and their three largest nested events each. Type descriptors are written by the test.",
+ "events": [
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "X",
+   "cat": "checkTypes",
+   "ts": 6986219.52,
+   "name": "getVariancesWorker",
+   "dur": 503067.9780000001,
+   "args": {
+    "arity": 4,
+    "id": 355795,
+    "results": {
+     "variances": [
+      "out",
+      "out",
+      "out",
+      "out"
+     ]
+    }
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "X",
+   "cat": "checkTypes",
+   "ts": 6987372.355,
+   "name": "getVariancesWorker",
+   "dur": 501009.37600000016,
+   "args": {
+    "arity": 4,
+    "id": 356364,
+    "results": {
+     "variances": [
+      "out",
+      "out",
+      "out",
+      "out (unreliable)"
+     ]
+    }
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "X",
+   "cat": "checkTypes",
+   "ts": 7000852.398,
+   "name": "getVariancesWorker",
+   "dur": 432959.30599999987,
+   "args": {
+    "arity": 4,
+    "id": 357760,
+    "results": {
+     "variances": [
+      "out",
+      "out",
+      "out",
+      "[bivariant]"
+     ]
+    }
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "X",
+   "cat": "checkTypes",
+   "ts": 7001307.447,
+   "name": "getVariancesWorker",
+   "dur": 255092.27500000037,
+   "args": {
+    "arity": 6,
+    "id": 357784,
+    "results": {
+     "variances": [
+      "[bivariant]",
+      "in out (unreliable)",
+      "out",
+      "out",
+      "out (unreliable)",
+      "out"
+     ]
+    }
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "X",
+   "cat": "checkTypes",
+   "ts": 6340567.847,
+   "name": "getVariancesWorker",
+   "dur": 479130.34300000034,
+   "args": {
+    "arity": 4,
+    "id": 299562,
+    "results": {
+     "variances": [
+      "in out",
+      "out",
+      "out",
+      "out"
+     ]
+    }
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "X",
+   "cat": "checkTypes",
+   "ts": 6340673.977,
+   "name": "getVariancesWorker",
+   "dur": 478631.034,
+   "args": {
+    "arity": 4,
+    "id": 303717,
+    "results": {
+     "variances": [
+      "in out",
+      "out",
+      "out",
+      "out"
+     ]
+    }
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "X",
+   "cat": "checkTypes",
+   "ts": 6345641.419,
+   "name": "getVariancesWorker",
+   "dur": 469541.767,
+   "args": {
+    "arity": 3,
+    "id": 305216,
+    "results": {
+     "variances": [
+      "in out (unreliable)",
+      "out",
+      "[bivariant]"
+     ]
+    }
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "X",
+   "cat": "checkTypes",
+   "ts": 6346046.068,
+   "name": "getVariancesWorker",
+   "dur": 263657.375,
+   "args": {
+    "arity": 5,
+    "id": 305615,
+    "results": {
+     "variances": [
+      "[bivariant]",
+      "in out (unreliable)",
+      "in out (unreliable)",
+      "out",
+      "out"
+     ]
+    }
+   }
+  }
+ ]
+}

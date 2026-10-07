@@ -1,0 +1,470 @@
+{
+ "note": "Trimmed real trace of the TanStack form-core 2216fde DeepKeys repro (typescript ts7), 3 depth events per type id plus the last event. limitEventCounts holds the counts of the full trace.",
+ "limitEventCounts": {
+  "228": 114965,
+  "417": 1,
+  "487": 57440,
+  "488": 114880,
+  "489": 1,
+  "491": 114887,
+  "499": 1,
+  "525": 1
+ },
+ "events": [
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "B",
+   "cat": "check",
+   "ts": 92107.687,
+   "name": "checkSourceFile",
+   "args": {
+    "checkerId": 0,
+    "path": "{{base}}/repro-project/k.ts"
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "E",
+   "cat": "check",
+   "ts": 54717067.569,
+   "name": "checkSourceFile",
+   "args": {
+    "checkerId": 0,
+    "path": "{{base}}/repro-project/k.ts"
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 103946.103,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2792,
+    "instantiationDepth": 100,
+    "typeId": 228
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 103969.243,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2801,
+    "instantiationDepth": 100,
+    "typeId": 228
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 104330.173,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2819,
+    "instantiationDepth": 100,
+    "typeId": 417
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 104339.953,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2828,
+    "instantiationDepth": 100,
+    "typeId": 488
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 104343.543,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2828,
+    "instantiationDepth": 100,
+    "typeId": 491
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 104349.902,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2835,
+    "instantiationDepth": 100,
+    "typeId": 487
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 104352.552,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2835,
+    "instantiationDepth": 100,
+    "typeId": 488
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 104355.432,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2835,
+    "instantiationDepth": 100,
+    "typeId": 491
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 104685.781,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2839,
+    "instantiationDepth": 100,
+    "typeId": 488
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 104688.871,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2839,
+    "instantiationDepth": 100,
+    "typeId": 491
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 104694.031,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2846,
+    "instantiationDepth": 100,
+    "typeId": 487
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 105360.519,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 2895,
+    "instantiationDepth": 100,
+    "typeId": 228
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 107354.802,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 3040,
+    "instantiationDepth": 100,
+    "typeId": 487
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 54709988.564,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 5000000,
+    "instantiationDepth": 98,
+    "typeId": 489
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 54709992.394,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 5000000,
+    "instantiationDepth": 98,
+    "typeId": 499
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 54717006.299,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 5000000,
+    "instantiationDepth": 3,
+    "typeId": 525
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 2,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 54717006.299,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "checkerId": 0,
+    "instantiationCount": 5000000,
+    "instantiationDepth": 3,
+    "typeId": 525
+   }
+  }
+ ],
+ "types": [
+  {
+   "id": 228,
+   "symbolName": "T",
+   "recursionId": 197,
+   "firstDeclaration": {
+    "path": "{{base}}/src/util-types.ts",
+    "start": {
+     "line": 152,
+     "character": 3
+    },
+    "end": {
+     "line": 152,
+     "character": 4
+    }
+   },
+   "flags": [
+    "TypeParameter"
+   ]
+  },
+  {
+   "id": 417,
+   "symbolName": "T",
+   "recursionId": 369,
+   "firstDeclaration": {
+    "path": "{{base}}/src/util-types.ts",
+    "start": {
+     "line": 97,
+     "character": 27
+    },
+    "end": {
+     "line": 97,
+     "character": 28
+    }
+   },
+   "flags": [
+    "TypeParameter"
+   ]
+  },
+  {
+   "id": 487,
+   "symbolName": "TParent",
+   "recursionId": 429,
+   "firstDeclaration": {
+    "path": "{{base}}/src/util-types.ts",
+    "start": {
+     "line": 124,
+     "character": 3
+    },
+    "end": {
+     "line": 124,
+     "character": 37
+    }
+   },
+   "flags": [
+    "TypeParameter"
+   ]
+  },
+  {
+   "id": 488,
+   "symbolName": "T",
+   "recursionId": 430,
+   "firstDeclaration": {
+    "path": "{{base}}/src/util-types.ts",
+    "start": {
+     "line": 125,
+     "character": 3
+    },
+    "end": {
+     "line": 125,
+     "character": 4
+    }
+   },
+   "flags": [
+    "TypeParameter"
+   ]
+  },
+  {
+   "id": 489,
+   "symbolName": "TAcc",
+   "recursionId": 431,
+   "firstDeclaration": {
+    "path": "{{base}}/src/util-types.ts",
+    "start": {
+     "line": 126,
+     "character": 3
+    },
+    "end": {
+     "line": 126,
+     "character": 7
+    }
+   },
+   "flags": [
+    "TypeParameter"
+   ]
+  },
+  {
+   "id": 491,
+   "symbolName": "TAllKeys",
+   "recursionId": 432,
+   "firstDeclaration": {
+    "path": "{{base}}/src/util-types.ts",
+    "start": {
+     "line": 127,
+     "character": 3
+    },
+    "end": {
+     "line": 127,
+     "character": 55
+    }
+   },
+   "flags": [
+    "TypeParameter"
+   ]
+  },
+  {
+   "id": 499,
+   "symbolName": "ObjectDeepKeyAndValue",
+   "recursionId": 440,
+   "instantiatedType": 468,
+   "typeArguments": [
+    487,
+    488,
+    491
+   ],
+   "firstDeclaration": {
+    "path": "{{base}}/src/util-types.ts",
+    "start": {
+     "line": 114,
+     "character": 1
+    },
+    "end": {
+     "line": 121,
+     "character": 2
+    }
+   },
+   "flags": [
+    "Object"
+   ]
+  },
+  {
+   "id": 525,
+   "symbolName": "AnyDeepKeyAndValue",
+   "recursionId": 456,
+   "instantiatedType": 147,
+   "typeArguments": [
+    14,
+    1
+   ],
+   "referenceLocation": {
+    "path": "{{base}}/src/util-types.ts",
+    "start": {
+     "line": 147,
+     "character": 36
+    },
+    "end": {
+     "line": 147,
+     "character": 54
+    }
+   },
+   "firstDeclaration": {
+    "path": "{{base}}/src/util-types.ts",
+    "start": {
+     "line": 39,
+     "character": 1
+    },
+    "end": {
+     "line": 45,
+     "character": 2
+    }
+   },
+   "flags": [
+    "Object"
+   ]
+  }
+ ]
+}
