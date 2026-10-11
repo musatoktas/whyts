@@ -36,7 +36,7 @@ node src/cli.js --project /path/to/your/tsconfig.json
 By default, whyts prints at most three actions and one summary line. Each action has a pattern, a location, a short remedy and a link. The image above is a recorded run. Use `--verbose` for the full report.
 
 ```text
-whyts 0.7.0 · TypeScript 5.9.3 · repro-project/tsconfig.json
+whyts 0.8.2 · TypeScript 5.9.3 · repro-project/tsconfig.json
 
 1. [measured] Recursive type instantiation: DeepKeys<Values>
    Where: k.ts:4:17
@@ -45,13 +45,13 @@ whyts 0.7.0 · TypeScript 5.9.3 · repro-project/tsconfig.json
    DeepKeysAndValuesImpl refers to itself: DeepKeysAndValuesImpl -> DeepKeyAndValueArray -> DeepKeysAndValuesImpl.
    Type argument JsonData (k.ts:2): JsonData refers to itself.
    Fix: Stop the expansion of DeepKeysAndValuesImpl when it meets a type it already visited. Or add a depth limit to it. Check that the fix keeps the same results.
-   Cost: 10875.5 ms, at most 99.4% of Check time (upper bound, not a saving)
+   Cost: 13118 ms, at most 99.5% of Check time (upper bound, not a saving)
    Docs: https://github.com/microsoft/TypeScript/wiki/Performance
 
-Check 10.94s · Total 11.21s · 65 files · 1 compiler error · 1 finding in the full report. Use --verbose to see them.
+Check 13.18s · Total 13.55s · 65 files · 1 compiler error · 1 finding in the full report. Use --verbose to see them.
 ```
 
-Two patterns have a remedy in 0.7. Each one was seen in a real project before it was added.
+Two patterns have a remedy. Each one was seen in a real project before it was added.
 
 | Pattern | Trace evidence | Remedy |
 | --- | --- | --- |
@@ -66,6 +66,14 @@ Rules:
 - In the compact report, a slow check without a known pattern shows only above 3% of Check time. A check that a diagnosis already explains by type name is not listed twice.
 - The trace events exist in TypeScript 5.9, 6.0 and 7.0 (`instantiateType_DepthLimit`, `getVariancesWorker`). In TypeScript 7 they carry a `checkerId`, and whyts uses one checker, so the type ids stay unique.
 - Remedies are short instructions. They name a direction. whyts did not measure any remedy on your project.
+
+## Results on real projects
+
+| Project | What whyts found | Result |
+| --- | --- | --- |
+| TanStack Form ([#1474](https://github.com/TanStack/form/issues/1474)) | TS2589 in `DeepKeys`: the type alias refers to itself through `DeepKeyAndValueArray` | A fix in [PR #2422](https://github.com/TanStack/form/pull/2422). Check time of the repro went from 7.4 s to 0.06 s |
+| Hono ([#2399](https://github.com/honojs/hono/issues/2399)) | TS2589 in `JSONParsed` (`src/utils/types.ts:53`) with a recursive JSON type | A fix that stops at a visited type, in [issue #5543](https://github.com/honojs/hono/issues/5543). A depth limit made the `.d.ts` output 313,638 bytes; the fix keeps it at 762 bytes |
+| node-redis ([#2975](https://github.com/redis/node-redis/issues/2975)) | 4.1 s of a 4.3 s check in one structural comparison of two `RedisClusterType` instantiations | Measurements from 4.7.0 to 6.3.0 in [a comment](https://github.com/redis/node-redis/issues/2975#issuecomment-6081025083) |
 
 ## What it finds
 
