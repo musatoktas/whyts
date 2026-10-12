@@ -9,6 +9,14 @@
 
 A small CLI that turns compiler diagnostics, traces, and import relationships into evidence you can act on. It says where the check is slow, and for two known patterns it also says why and what to do. No account, API key, or LLM required.
 
+```sh
+npx whyts
+```
+
+Run it in the folder of your `tsconfig.json`. It runs the real compiler once and prints at most three actions. To prove that a type change helped, use `npx whyts compare` (see below). To give the same evidence to an AI coding agent, use `claude mcp add --transport stdio whyts -- npx -y whyts-mcp`.
+
+Found with whyts: a 7.4 s type check that went to 0.06 s (TanStack Form) and `vue-tsc` going from 80 s to 0.56 s (Vue). See [Real cases](#real-cases).
+
 ![whyts terminal report](docs/demo.svg)
 
 ## Try it
@@ -67,11 +75,16 @@ Rules:
 - The trace events exist in TypeScript 5.9, 6.0 and 7.0 (`instantiateType_DepthLimit`, `getVariancesWorker`). In TypeScript 7 they carry a `checkerId`, and whyts uses one checker, so the type ids stay unique.
 - Remedies are short instructions. They name a direction. whyts did not measure any remedy on your project.
 
-## Results on real projects
+## Real cases
+
+whyts found the place in each case below. The fixes are open pull requests in those projects, so they are proposals until the maintainers merge them. Each number comes from my own measurement on the stated compiler version.
 
 | Project | What whyts found | Result |
 | --- | --- | --- |
-| TanStack Form ([#1474](https://github.com/TanStack/form/issues/1474)) | TS2589 in `DeepKeys`: the type alias refers to itself through `DeepKeyAndValueArray` | A fix in [PR #2422](https://github.com/TanStack/form/pull/2422). Check time of the repro went from 7.4 s to 0.06 s |
+| tRPC ([#6997](https://github.com/trpc/trpc/issues/6997)) | TS2589 in `Serialize` (`serialize.ts:35`) when the type contains a recursive JSON type such as `Prisma.JsonValue` | A fix in [PR #7660](https://github.com/trpc/trpc/pull/7660). The repro had TS2589 on main and has no error with the fix. Instantiations went from 89,700 to 78,502. The type-check time of `packages/server` did not change (within noise) |
+| TanStack Form ([#1474](https://github.com/TanStack/form/issues/1474)) | TS2589 in `DeepKeys`: the type alias refers to itself through `DeepKeyAndValueArray` | A fix in [PR #2422](https://github.com/TanStack/form/pull/2422). Check time of the repro went from 7.4 s to 0.06 s (`whyts compare`, 10 runs, separated). `form-core` stayed within noise |
+| TypeORM ([#8559](https://github.com/typeorm/typeorm/issues/8559)) | TS2589 in `QueryDeepPartialEntity` (`QueryPartialEntity.ts:17`) for types that contain themselves | A fix in [PR #12943](https://github.com/typeorm/typeorm/pull/12943). whyts reports the diagnosis before the change and reports none after it |
+| Vue ([#14323](https://github.com/vuejs/core/issues/14323)) | `defineModel` with a `defineEmits` call signature that ends in `void` makes `OverloadUnionRecursive` (`@vue/shared`) run to the depth limit. It is 100% of the Check time | A fix in [PR #15851](https://github.com/vuejs/core/pull/15851). `vue-tsc` with 1, 2 and 3 emits went from 31.1, 55.3 and 80.0 s to 0.42, 0.49 and 0.56 s (TypeScript 5.9.3). A component with 40 overloads and a model still hits TS2589, as it did before |
 | Hono ([#2399](https://github.com/honojs/hono/issues/2399)) | TS2589 in `JSONParsed` (`src/utils/types.ts:53`) with a recursive JSON type | A fix that stops at a visited type, in [issue #5543](https://github.com/honojs/hono/issues/5543). A depth limit made the `.d.ts` output 313,638 bytes; the fix keeps it at 762 bytes |
 | node-redis ([#2975](https://github.com/redis/node-redis/issues/2975)) | 4.1 s of a 4.3 s check in one structural comparison of two `RedisClusterType` instantiations | Measurements from 4.7.0 to 6.3.0 in [a comment](https://github.com/redis/node-redis/issues/2975#issuecomment-6081025083) |
 
