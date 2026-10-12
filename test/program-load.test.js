@@ -18,7 +18,7 @@ const counters = (total, check, extra = {}) => ({ 'Total time': { value: total, 
   'Memory used': { value: 535184, unit: 'K' }, ...extra });
 
 function project(t, { components = COMPONENTS, frameworkImport = true } = {}) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-load-')));
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "whyts-load-")));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const write = (name, text) => { const file = path.join(base, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
   const pkg = 'node_modules/bigpkg';
