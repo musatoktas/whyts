@@ -7,7 +7,7 @@
 
 **Find out why your TypeScript project is slow.**
 
-A small CLI that turns compiler diagnostics, traces, and import relationships into evidence you can act on. It says where the check is slow, and for two known patterns it also says why and what to do. No account, API key, or LLM required.
+A small CLI that turns compiler diagnostics, traces, and import relationships into evidence you can act on. It says where the check is slow, and for three known patterns it also says why and what to do. No account, API key, or LLM required.
 
 ```sh
 npx whyts
@@ -59,12 +59,25 @@ whyts 0.8.2 · TypeScript 5.9.3 · repro-project/tsconfig.json
 Check 13.18s · Total 13.55s · 65 files · 1 compiler error · 1 finding in the full report. Use --verbose to see them.
 ```
 
-Two patterns have a remedy. Each one was seen in a real project before it was added.
+Three patterns have a remedy. Each one was seen in a real project before it was added.
 
 | Pattern | Trace evidence | Remedy |
 | --- | --- | --- |
 | `recursive-type-instantiation` | A TS2589 error and the `instantiateType_DepthLimit` events. whyts finds the type alias that owns the type parameters at the limit, a reference cycle by name between aliases, and a type argument that refers to itself | Stop the expansion on a type that was visited, or add a depth limit |
 | `variance-computation` | `getVariancesWorker` events with the type id, the number of type parameters and the result. whyts reports the outermost events, the largest nested ones, and their union time | Reduce type parameters, simplify return types. An `in` or `out` annotation is not a guaranteed fix |
+| `program-load` | The program is big, and the check is not. The compiler counters (Total time, Check time, Memory used, parse and bind time) and the import graph. whyts reports the files from `node_modules`, the largest packages, the file that brings most of them, and the `typeof import()` references that bring them | Use a narrower entry point, or ask the maintainers of the package to move the references to an opt-in entry point. `skipLibCheck` does not help: it skips checking, not loading |
+
+A `program-load` action looks like this (`vuetify` 4.2.4, a project that only has `import { createVuetify } from "vuetify"`; the lines are shortened):
+
+```text
+1. [measured] Program load: 421 dependency files, vuetify has 407; Check time is 0.01s of 4.22s
+   Where: ../node_modules/vuetify/lib/framework.d.ts:1:1
+   The program has 480 files: 421 in node_modules (13.8 MB of source), 58 compiler library files and 1 of your own. ... Memory used 577 MB in the traced run.
+   Largest packages by files: vuetify 407 (12 MB), @vuetify/v0 3 (0 MB), vue 2 (0 MB), ...
+   409 of them (11.9 MB) come only through 218 typeof import() type references in ../node_modules/vuetify/lib/framework.d.ts, to ../node_modules/vuetify/lib/components/index.d.ts (192), ...
+   Shortest import chain: index.ts -> ../node_modules/vuetify/lib/framework.d.ts -> ../node_modules/vuetify/lib/components/index.d.ts
+   Fix: Each typeof import() reference in ... loads its target for every project that imports the package. Ask the maintainers to move them to an opt-in entry point. skipLibCheck skips checking these files, not loading them. ...
+```
 
 Rules:
 
@@ -73,11 +86,13 @@ Rules:
 - The cost is the largest recorded interval for the place, shown as at most N% of Check time. It is an upper bound under tracing. It is not a predicted saving.
 - In the compact report, a slow check without a known pattern shows only above 3% of Check time. A check that a diagnosis already explains by type name is not listed twice.
 - The trace events exist in TypeScript 5.9, 6.0 and 7.0 (`instantiateType_DepthLimit`, `getVariancesWorker`). In TypeScript 7 they carry a `checkerId`, and whyts uses one checker, so the type ids stay unique.
+- The `program-load` pattern needs all of these: 200 files or more from `node_modules`, a Total time of 1.5 s or more, a Check time of at most 1 s and at most 10% of the Total time, and one file that alone brings 100 files or more (and 25% of the dependency files). The compiler library files and your own files do not count as dependency files. A project with a normal amount of its own code has a larger Check time and does not match. The counters come from the traced run, where Memory used is higher than in a plain run.
+- `program-load` is a measurement of the program, not of the check. It does not say that removing the files makes the check faster: the check time of such a program is already small. It reads `typeof import('pkg')` in declaration files as an import. A file that is also brought by a regular import is not counted as brought only by those references.
 - Remedies are short instructions. They name a direction. whyts did not measure any remedy on your project.
 
 ## Real cases
 
-whyts found the place in each case below. The fixes are open pull requests in those projects, so they are proposals until the maintainers merge them. Each number comes from my own measurement on the stated compiler version.
+whyts found the place in each case below. The fixes are open pull requests in those projects, so they are proposals until the maintainers merge them. The Vuetify row is a measurement in an issue, with no fix. Each number comes from my own measurement on the stated compiler version.
 
 | Project | What whyts found | Result |
 | --- | --- | --- |
@@ -87,6 +102,7 @@ whyts found the place in each case below. The fixes are open pull requests in th
 | Vue ([#14323](https://github.com/vuejs/core/issues/14323)) | `defineModel` with a `defineEmits` call signature that ends in `void` makes `OverloadUnionRecursive` (`@vue/shared`) run to the depth limit. It is 100% of the Check time | A fix in [PR #15851](https://github.com/vuejs/core/pull/15851). `vue-tsc` with 1, 2 and 3 emits went from 31.1, 55.3 and 80.0 s to 0.42, 0.49 and 0.56 s (TypeScript 5.9.3). A component with 40 overloads and a model still hits TS2589, as it did before |
 | Hono ([#2399](https://github.com/honojs/hono/issues/2399)) | TS2589 in `JSONParsed` (`src/utils/types.ts:53`) with a recursive JSON type | A fix that stops at a visited type, in [issue #5543](https://github.com/honojs/hono/issues/5543). A depth limit made the `.d.ts` output 313,638 bytes; the fix keeps it at 762 bytes |
 | node-redis ([#2975](https://github.com/redis/node-redis/issues/2975)) | 4.1 s of a 4.3 s check in one structural comparison of two `RedisClusterType` instantiations | Measurements from 4.7.0 to 6.3.0 in [a comment](https://github.com/redis/node-redis/issues/2975#issuecomment-6081025083) |
+| Vuetify ([#23005](https://github.com/vuetifyjs/vuetify/issues/23005)) | One `import { createVuetify } from "vuetify"` makes a program of 480 files (tsc: Memory used 535,557K, Check time 0.01 s, Total time 2.56 s on 4.2.4). `program-load` names `lib/framework.d.ts`: its 218 `typeof import()` references (the `GlobalComponents` block among them) bring 409 of the 421 dependency files | The issue is open. No fix is proposed here. Emptying only the `GlobalComponents` block gave 111 files and Memory used 101,701K. That was a measurement of an upper bound, not a fix: it removes the global component types. Measured on 4.2.4 and TypeScript 5.9.3 |
 
 ## What it finds
 
