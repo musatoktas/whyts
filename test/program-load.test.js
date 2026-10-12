@@ -50,6 +50,12 @@ test('a big program with a cheap check names the file that brings the files and 
   assert.equal(d.evidence.lead.filesOnlyThroughIt, COMPONENTS + 1);
   assert.deepEqual(d.evidence.lead.importedBy, ['node_modules/bigpkg/lib/framework.d.ts']);
   assert.deepEqual(d.evidence.lead.chain.slice(0, 3), ['src/index.ts', 'node_modules/bigpkg/lib/index.d.ts', 'node_modules/bigpkg/lib/framework.d.ts']);
+  const types = d.evidence.lead.importTypeReferences;
+  assert.equal(types.file, 'node_modules/bigpkg/lib/framework.d.ts');
+  assert.equal(types.references, 3);
+  assert.equal(types.filesOnlyThroughThem, COMPONENTS + 1);
+  assert.deepEqual(types.targets.map(t => [t.file, t.references, t.filesOnlyThroughIt]), [['node_modules/bigpkg/lib/components/index.d.ts', 3, COMPONENTS + 1]]);
+  assert.match(d.remedy, /opt-in entry point/);
   assert.deepEqual(d.evidence.packages[0].name, 'bigpkg');
   assert.equal(d.evidence.memoryMegabytes, 523);
   assert.ok(d.evidence.summary.some(l => l.includes('Parse 1.5s')));
@@ -57,6 +63,19 @@ test('a big program with a cheap check names the file that brings the files and 
   assert.ok(Math.abs(d.milliseconds - 4180) < 1e-6);
   assert.match(d.remedy, /skipLibCheck/);
   assert.ok(d.evidence.summary.length <= 6);
+});
+
+test('a regular import of the same file is not counted as a typeof import() reference', t => {
+  const { base, graph } = project(t);
+  const framework = path.join(base, 'node_modules/bigpkg/lib/framework.d.ts');
+  assert.ok(graph.importTypes.get(framework).size > 0);
+  const mixed = project(t);
+  fs.appendFileSync(path.join(mixed.base, 'node_modules/bigpkg/lib/framework.d.ts'), 'import type {} from "./components/index";\n');
+  const again = buildGraph(ts, readProject(mixed.base, ts));
+  assert.equal(again.importTypes.get(path.join(mixed.base, 'node_modules/bigpkg/lib/framework.d.ts')), undefined);
+  const d = programLoadDiagnosis({ graph: again, base: mixed.base, diagnostics: counters(4.19, 0.01) });
+  assert.equal(d.evidence.lead.importTypeReferences, undefined);
+  assert.match(d.remedy, /narrower entry point/);
 });
 
 test('the same program with the barrel import removed gives no diagnosis', t => {

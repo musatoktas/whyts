@@ -363,6 +363,46 @@ function programLoadLead(graph, sizes, dependencyTotal) {
   return { file: files[current], entry: files[entry], files: subtree[current].files, bytes: subtree[current].bytes };
 }
 
+// Dependency files that stop being reachable from the roots when the edges from one file to some targets are removed.
+function filesLostWithout(graph, sizes, from, targets) {
+  const roots = [...graph.roots].filter(file => graph.files.has(file));
+  const walk = skip => {
+    const seen = new Set(roots), stack = [...roots];
+    while (stack.length) {
+      const file = stack.pop();
+      for (const next of graph.edges.get(file) ?? []) {
+        if (seen.has(next) || (skip && file === from && targets.has(next))) continue;
+        seen.add(next); stack.push(next);
+      }
+    }
+    return seen;
+  };
+  const before = walk(false), after = walk(true);
+  let files = 0, bytes = 0;
+  for (const file of before) if (!after.has(file) && sizes.get(file)?.kind === 'dependency') { files++; bytes += sizes.get(file).bytes; }
+  return { files, bytes };
+}
+
+// typeof import('pkg') references in the files on the chain to the lead file: how many, and how many files only they bring.
+// The file with the largest set wins.
+function importTypeCost(graph, sizes, base, chain) {
+  let best = null;
+  for (const name of chain) {
+    const file = path.resolve(base, name);
+    const counts = graph.importTypes?.get(file);
+    if (!counts?.size || sizes.get(file)?.kind !== 'dependency') continue;
+    const group = filesLostWithout(graph, sizes, file, new Set(counts.keys()));
+    if (group.files >= PROGRAM_LOAD.minLeadFiles && (!best || group.files > best.group.files)) best = { file, counts, group };
+  }
+  if (!best) return null;
+  const targets = [...best.counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3).map(([target, references]) => {
+    const own = filesLostWithout(graph, sizes, best.file, new Set([target]));
+    return { file: display(base, target), references, filesOnlyThroughIt: own.files, megabytesOnlyThroughIt: megabytes(own.bytes) };
+  });
+  return { file: display(base, best.file), references: [...best.counts.values()].reduce((a, b) => a + b, 0),
+    filesOnlyThroughThem: best.group.files, megabytesOnlyThroughThem: megabytes(best.group.bytes), targets };
+}
+
 function chainSummary(chain) {
   return chain.length > 6 ? [...chain.slice(0, 2), '...', ...chain.slice(-3)].join(' -> ') : chain.join(' -> ');
 }
@@ -392,25 +432,30 @@ export function programLoadDiagnosis({ graph, base, diagnostics }) {
   const memory = diagnostics['Memory used'];
   const memoryMegabytes = memory ? Math.round(memory.unit === 'K' ? memory.value / 1024 : memory.unit === 'M' ? memory.value : memory.value / 1048576) : null;
   const phases = ['I/O Read time', 'Parse time', 'Bind time', 'ResolveModule time'].filter(k => diagnostics[k]).map(k => `${k.replace(' time', '')} ${secondsText(diagnostics[k].value)}s`);
+  const typeCost = importTypeCost(graph, sizes, base, chain);
   const loadSeconds = total - check;
   const programFiles = graph.files.size;
   const summary = [
     `The program has ${programFiles} files: ${dependencyFiles} in node_modules (${megabytes(dependencyBytes)} MB of source), ${libraryFiles} compiler library files and ${projectFiles} of your own. Check time is ${secondsText(check)}s of ${secondsText(total)}s.` +
-      `${memoryMegabytes != null ? ` Memory used ${memoryMegabytes} MB.` : ''}${phases.length ? ` Phases: ${phases.join(', ')}.` : ''}`,
+      `${memoryMegabytes != null ? ` Memory used ${memoryMegabytes} MB in the traced run.` : ''}${phases.length ? ` Phases: ${phases.join(', ')}.` : ''}`,
     `Largest packages by files: ${top.map(p => `${p.name} ${p.files} (${p.megabytes} MB)`).join(', ')}.`,
     `${leadName} is the file that brings ${lead.files} of these files (${megabytes(lead.bytes)} MB). No other import reaches them.` + (importedBy.length ? ` Imported by ${importedBy.join(', ')}.` : ''),
-    `Shortest import chain: ${chainSummary(chain)}`
+    ...(typeCost ? [`${typeCost.filesOnlyThroughThem} of them (${typeCost.megabytesOnlyThroughThem} MB) come only through ${typeCost.references} typeof import() type references in ${typeCost.file}, to ${typeCost.targets.map(t => `${t.file} (${t.references})`).join(', ')}.`] : []),
+    `Shortest import chain: ${chainSummary(typeCost && !chain.includes(typeCost.targets[0].file) ? [...chain, typeCost.targets[0].file] : chain)}`
   ].map(clean);
   return { pattern: 'program-load', confidence: 'measured',
     title: `Program load: ${dependencyFiles} dependency files, ${top[0].name} has ${top[0].files}; Check time is ${secondsText(check)}s of ${secondsText(total)}s`,
     location: { file: leadName, line: 1, character: 1 }, milliseconds: loadSeconds * 1000, checkTimeShareUpperBoundPercent: null,
     evidence: { programFiles, dependencyFiles, libraryFiles, projectFiles, dependencyMegabytes: megabytes(dependencyBytes),
       checkSeconds: check, totalSeconds: total, memoryMegabytes, packages: top, entry: entryName,
-      lead: { file: leadName, filesOnlyThroughIt: lead.files, megabytesOnlyThroughIt: megabytes(lead.bytes), importedBy, chain },
+      lead: { file: leadName, filesOnlyThroughIt: lead.files, megabytesOnlyThroughIt: megabytes(lead.bytes), importedBy, chain,
+        ...(typeCost ? { importTypeReferences: typeCost } : {}) },
       location: { file: leadName }, thresholds: { ...PROGRAM_LOAD }, summary,
       details: [...summary, ...chain.map((f, i) => `chain ${i + 1}: ${f}`)] },
-    remedy: `The files of ${leadName} enter the program only through it. skipLibCheck does not remove them: it skips checking them, not loading them. ` +
-      `See why ${top[0].name} needs that file. Use a narrower entry point of the package if it has one, or tell its maintainers about the chain. Measure Files and Memory used again after each change.`,
+    remedy: (typeCost
+      ? `Each typeof import() reference in ${typeCost.file} loads its target for every project that imports the package. Ask the maintainers to move them to an opt-in entry point. `
+      : `The files of ${leadName} enter the program only through it. See why ${top[0].name} needs that file. Use a narrower entry point of the package if it has one, or tell its maintainers about the chain. `) +
+      'skipLibCheck skips checking these files, not loading them. Measure Files and Memory used again after each change.',
     docs: PERFORMANCE_DOCS };
 }
 
