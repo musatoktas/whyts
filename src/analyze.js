@@ -127,12 +127,16 @@ export function readProject(project, ts, { native = false } = {}) {
 function collectSpecifiers(ts, source) {
   const specs = new Map();
   let reexports = 0;
-  const add = node => {
+  // typeReferences counts typeof import('pkg') and import('pkg').Name type nodes; they are kept apart from imports.
+  const add = (node, type = false) => {
     if (node && ts.isStringLiteralLike(node)) {
       let mode;
       try { mode = ts.getModeForUsageLocation(source, node); }
       catch { mode = undefined; /* Unknown usage mode: resolve with the compiler default. */ }
-      specs.set(`${node.text}:${mode}`, { spec: node.text, mode });
+      const key = `${node.text}:${mode}`;
+      const entry = specs.get(key) ?? { spec: node.text, mode, typeReferences: 0, otherReferences: 0 };
+      if (type) entry.typeReferences++; else entry.otherReferences++;
+      specs.set(key, entry);
     }
   };
   function visit(node) {
@@ -141,6 +145,9 @@ function collectSpecifiers(ts, source) {
       if (ts.isExportDeclaration(node) && node.moduleSpecifier) reexports++;
     } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
       add(node.moduleReference.expression);
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      // typeof import('pkg')['Name'] in a declaration file loads pkg like an import does.
+      add(node.argument.literal, true);
     } else if (ts.isCallExpression(node) && node.arguments.length === 1 &&
       (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
        (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
@@ -164,6 +171,8 @@ export function buildGraph(ts, project) {
   const lowerFiles = new Map();
   for (const [file, source] of files) { const key = file.toLowerCase(); if (!lowerFiles.has(key)) lowerFiles.set(key, source); }
   const edges = new Map();
+  // file -> (dependency -> number of typeof import('x') references), for dependencies that only such references bring.
+  const importTypes = new Map();
   const incoming = new Map();
   const barrels = [];
   const skipped = [];
@@ -175,20 +184,28 @@ export function buildGraph(ts, project) {
     catch (error) { skipped.push({ file: display(base, file), reason: errorSummary(error) }); collected = { specs: new Map(), reexports: 0 }; }
     const { specs, reexports } = collected;
     const deps = new Set();
-    for (const { spec, mode } of specs.values()) {
+    const typeCounts = new Map(), otherEdges = new Set();
+    for (const { spec, mode, typeReferences, otherReferences } of specs.values()) {
       // Resolve each import using its actual ESM/CJS usage mode, including dynamic import.
       const resolved = ts.resolveModuleName(spec, file, parsed.options, ts.sys, cache,
         undefined, mode).resolvedModule;
       if (resolved) {
         const dep = path.resolve(resolved.resolvedFileName);
-        if (files.has(dep)) deps.add(dep);
+        if (files.has(dep)) {
+          deps.add(dep);
+          // An edge that only type references make: the same file may be named by several specifiers.
+          if (typeReferences) typeCounts.set(dep, (typeCounts.get(dep) ?? 0) + typeReferences);
+          if (otherReferences) otherEdges.add(dep);
+        }
       }
     }
     for (const ref of source.referencedFiles) {
       const dep = path.resolve(path.dirname(file), ref.fileName);
-      if (files.has(dep)) deps.add(dep);
+      if (files.has(dep)) { deps.add(dep); otherEdges.add(dep); }
     }
     edges.set(file, deps);
+    const typeOnly = new Map([...typeCounts].filter(([dep]) => !otherEdges.has(dep)));
+    if (typeOnly.size) importTypes.set(file, typeOnly);
     for (const dep of deps) {
       if (!incoming.has(dep)) incoming.set(dep, new Set());
       incoming.get(dep).add(file);
@@ -197,7 +214,7 @@ export function buildGraph(ts, project) {
       barrels.push({ file, reexports });
     }
   }
-  return { ts, program, files, lowerFiles, edges, incoming, barrels, skipped, roots: new Set(parsed.fileNames.map(f => path.resolve(f))) };
+  return { ts, program, files, lowerFiles, edges, importTypes, incoming, barrels, skipped, roots: new Set(parsed.fileNames.map(f => path.resolve(f))) };
 }
 
 export function reachable(edges, start) {
@@ -532,7 +549,7 @@ export async function analyze(options = {}) {
     const { typeHotspots, typeDescriptors } = trace;
     const traceWarnings = trace.warnings;
     findings.push(...measuredFindings({ hotspots, projectHotspots, sourceGroups }));
-    const diagnoses = buildDiagnoses({ signals: trace.signals, describe: trace.describe, checkSeconds, graph, base: project.base, compilerErrors,
+    const diagnoses = buildDiagnoses({ signals: trace.signals, describe: trace.describe, checkSeconds, diagnostics, graph, base: project.base, compilerErrors,
       intervals: { sourceGroups, projectHotspots } });
     const confidenceRank = { measured: 0, observed: 1, review: 2 };
     findings.sort((a, b) => confidenceRank[a.confidence] - confidenceRank[b.confidence]);
