@@ -283,7 +283,7 @@ function recursionDiagnosis({ signals, describe, checkSeconds, graph, base, comp
 // All limits must hold. They keep the diagnosis away from small programs and from programs whose time is the check.
 export const PROGRAM_LOAD = {
   minDependencyFiles: 200,   // files under node_modules, without the compiler library files
-  minTotalSeconds: 1.5,      // Total time of the traced run
+  minTotalSeconds: 1,        // Total time of the traced run
   maxCheckShare: 0.1,        // Check time as a share of Total time
   maxCheckSeconds: 1,        // and in absolute terms
   minLeadFiles: 100,         // files that only the lead file brings into the program

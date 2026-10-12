@@ -13,7 +13,7 @@ Measured on 2026-10-12 in GitHub Actions: the workflow `ci.yml` on pull request 
 | empty project | 59 | 0.00 s | 0.65 s | no |
 | `vue` only | 69 | 0.10 s | 1.17 s | no |
 
-The tests of the pattern are in `test/program-load.test.js`. The pull request has 8 more tests than main (121 before, 129 after). Total time on a shared runner varies from run to run (vuetify 4.2.4 gave 2.5 s to 5.1 s in other runs), so the limit on Total time is low (1.5 s) and the other limits do the work.
+The tests of the pattern are in `test/program-load.test.js`. The pull request has 8 more tests than main (121 before, 129 after). Total time on a shared runner varies from run to run (vuetify 4.2.4 gave 2.5 s to 5.1 s in other runs), so the limit on Total time is low (1 s) and the other limits do the work.
 
 # v0.8.2 validation
 
