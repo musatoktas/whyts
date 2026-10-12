@@ -141,6 +141,9 @@ function collectSpecifiers(ts, source) {
       if (ts.isExportDeclaration(node) && node.moduleSpecifier) reexports++;
     } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
       add(node.moduleReference.expression);
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      // typeof import('pkg')['Name'] in a declaration file loads pkg like an import does.
+      add(node.argument.literal);
     } else if (ts.isCallExpression(node) && node.arguments.length === 1 &&
       (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
        (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
@@ -532,7 +535,7 @@ export async function analyze(options = {}) {
     const { typeHotspots, typeDescriptors } = trace;
     const traceWarnings = trace.warnings;
     findings.push(...measuredFindings({ hotspots, projectHotspots, sourceGroups }));
-    const diagnoses = buildDiagnoses({ signals: trace.signals, describe: trace.describe, checkSeconds, graph, base: project.base, compilerErrors,
+    const diagnoses = buildDiagnoses({ signals: trace.signals, describe: trace.describe, checkSeconds, diagnostics, graph, base: project.base, compilerErrors,
       intervals: { sourceGroups, projectHotspots } });
     const confidenceRank = { measured: 0, observed: 1, review: 2 };
     findings.sort((a, b) => confidenceRank[a.confidence] - confidenceRank[b.confidence]);

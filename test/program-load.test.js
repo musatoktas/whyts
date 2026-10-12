@@ -61,7 +61,6 @@ test('a big program with a cheap check names the file that brings the files and 
 
 test('the same program with the barrel import removed gives no diagnosis', t => {
   const { base, graph } = project(t, { frameworkImport: false });
-  assert.equal(graph.files.size - 1 >= 0, true);
   assert.equal(programLoadDiagnosis({ graph, base, diagnostics: counters(0.7, 0.01) }), null);
 });
 

@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { traceSpans, findSource } from './trace.js';
+import { explainFile } from './analyze.js';
 
+const display = (base, file) => clean(path.relative(base, file).split(path.sep).join('/') || '.');
 const clean = value => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
 
 export const PERFORMANCE_DOCS = 'https://github.com/microsoft/TypeScript/wiki/Performance';
@@ -275,9 +277,148 @@ function recursionDiagnosis({ signals, describe, checkSeconds, graph, base, comp
     docs: PERFORMANCE_DOCS };
 }
 
+// ---- Program load ------------------------------------------------------------------------------------
+// A program can be large while the check is cheap: one import pulls hundreds of declaration files, and the compiler
+// spends its time and memory on reading, parsing and binding them. The signal is the program itself, not the trace.
+// All limits must hold. They keep the diagnosis away from small programs and from programs whose time is the check.
+export const PROGRAM_LOAD = {
+  minDependencyFiles: 200,   // files under node_modules, without the compiler library files
+  minTotalSeconds: 1.5,      // Total time of the traced run
+  maxCheckShare: 0.1,        // Check time as a share of Total time
+  maxCheckSeconds: 1,        // and in absolute terms
+  minLeadFiles: 100,         // files that only the lead file brings into the program
+  minLeadShare: 0.25,        // and as a share of all dependency files
+  descendShare: 0.8          // a child file continues the walk down when it brings at least this share of its parent
+};
+
+const slashed = file => file.split(path.sep).join('/');
+const isDependencyFile = file => slashed(file).includes('/node_modules/');
+
+function packageName(file) {
+  const parts = slashed(file).split('/node_modules/').pop().split('/');
+  return parts[0].startsWith('@') && parts.length > 1 ? `${parts[0]}/${parts[1]}` : parts[0];
+}
+
+// Immediate dominators over the import graph, with a virtual root before all configured roots (Cooper, Harvey, Kennedy).
+// A file dominates another when every import path from the roots to the other file passes through it.
+function dominatorTree(edges, rootFiles) {
+  const ids = new Map(), files = [null];
+  const idOf = file => { if (!ids.has(file)) { ids.set(file, files.length); files.push(file); } return ids.get(file); };
+  const successors = [rootFiles.map(idOf)];
+  // Iterative depth-first search from the virtual root: reverse post order is the visit order of the iteration below.
+  const order = [], state = [];
+  const stack = [[0, 0]];
+  state[0] = 1;
+  while (stack.length) {
+    const top = stack[stack.length - 1];
+    const list = successors[top[0]] ??= [...(edges.get(files[top[0]]) ?? [])].map(idOf);
+    if (top[1] < list.length) {
+      const next = list[top[1]++];
+      if (!state[next]) { state[next] = 1; stack.push([next, 0]); }
+    } else { order.push(top[0]); stack.pop(); }
+  }
+  const post = new Array(files.length).fill(-1);
+  order.forEach((id, i) => { post[id] = i; });
+  const predecessors = files.map(() => []);
+  for (const id of order) for (const next of successors[id] ?? []) if (post[next] >= 0) predecessors[next].push(id);
+  const idom = new Array(files.length).fill(-1);
+  idom[0] = 0;
+  const meet = (a, b) => { while (a !== b) { while (post[a] < post[b]) a = idom[a]; while (post[b] < post[a]) b = idom[b]; } return a; };
+  for (let changed = true; changed;) {
+    changed = false;
+    for (let i = order.length - 2; i >= 0; i--) {
+      const id = order[i];
+      let best = -1;
+      for (const p of predecessors[id]) if (idom[p] !== -1) best = best === -1 ? p : meet(p, best);
+      if (best !== idom[id]) { idom[id] = best; changed = true; }
+    }
+  }
+  return { files, order, idom };
+}
+
+function megabytes(bytes) { return Number((bytes / 1048576).toFixed(1)); }
+const secondsText = value => Number(Number(value).toFixed(2));
+
+// How many files, and how many bytes, enter the program only through each file.
+function programLoadLead(graph, sizes, dependencyTotal) {
+  const roots = [...graph.roots].filter(file => graph.files.has(file));
+  const { files, order, idom } = dominatorTree(graph.edges, roots);
+  const own = files.map(file => file ? sizes.get(file) : null);
+  const subtree = files.map((file, id) => ({ files: file && own[id]?.kind === 'dependency' ? 1 : 0, bytes: file && own[id]?.kind === 'dependency' ? own[id].bytes : 0 }));
+  for (const id of order) if (id !== 0 && idom[id] > 0) { subtree[idom[id]].files += subtree[id].files; subtree[idom[id]].bytes += subtree[id].bytes; }
+  const children = files.map(() => []);
+  for (const id of order) if (id !== 0) children[idom[id]].push(id);
+  const dependency = id => own[id]?.kind === 'dependency';
+  // The start is the dependency entry that brings the most files. Then walk down while one child brings almost all of them.
+  let current = order.filter(id => id !== 0 && dependency(id) && !dependency(idom[id]))
+    .sort((a, b) => subtree[b].files - subtree[a].files || a - b)[0];
+  if (current === undefined) return null;
+  const entry = current;
+  for (;;) {
+    const next = children[current].filter(dependency).sort((a, b) => subtree[b].files - subtree[a].files || a - b)[0];
+    if (next === undefined || subtree[next].files < PROGRAM_LOAD.descendShare * subtree[current].files) break;
+    current = next;
+  }
+  if (subtree[current].files < PROGRAM_LOAD.minLeadFiles || subtree[current].files < PROGRAM_LOAD.minLeadShare * dependencyTotal) return null;
+  return { file: files[current], entry: files[entry], files: subtree[current].files, bytes: subtree[current].bytes };
+}
+
+function chainSummary(chain) {
+  return chain.length > 6 ? [...chain.slice(0, 2), '...', ...chain.slice(-3)].join(' -> ') : chain.join(' -> ');
+}
+
+export function programLoadDiagnosis({ graph, base, diagnostics }) {
+  const total = diagnostics?.['Total time']?.value, check = diagnostics?.['Check time']?.value;
+  if (!graph || !Number.isFinite(total) || !Number.isFinite(check)) return null;
+  if (total < PROGRAM_LOAD.minTotalSeconds || check > PROGRAM_LOAD.maxCheckSeconds || check > PROGRAM_LOAD.maxCheckShare * total) return null;
+  const sizes = new Map(), packages = new Map();
+  let libraryFiles = 0, projectFiles = 0, dependencyFiles = 0, dependencyBytes = 0;
+  for (const [file, source] of graph.files) {
+    if (graph.program.isSourceFileDefaultLibrary(source)) { libraryFiles++; sizes.set(file, { kind: 'library' }); continue; }
+    if (!isDependencyFile(file)) { projectFiles++; sizes.set(file, { kind: 'project' }); continue; }
+    const bytes = Buffer.byteLength(source.text);
+    dependencyFiles++; dependencyBytes += bytes; sizes.set(file, { kind: 'dependency', bytes });
+    const entry = packages.get(packageName(file)) ?? { name: packageName(file), files: 0, bytes: 0 };
+    entry.files++; entry.bytes += bytes; packages.set(entry.name, entry);
+  }
+  if (dependencyFiles < PROGRAM_LOAD.minDependencyFiles) return null;
+  const lead = programLoadLead(graph, sizes, dependencyFiles);
+  if (!lead) return null;
+  const leadName = display(base, lead.file), entryName = display(base, lead.entry);
+  const chain = explainFile(graph, lead.file, base).chain;
+  const importedBy = [...(graph.incoming.get(lead.file) ?? [])].map(f => display(base, f)).sort().slice(0, 5);
+  const top = [...packages.values()].sort((a, b) => b.files - a.files || a.name.localeCompare(b.name)).slice(0, 5)
+    .map(p => ({ name: clean(p.name), files: p.files, megabytes: megabytes(p.bytes) }));
+  const memory = diagnostics['Memory used'];
+  const memoryMegabytes = memory ? Math.round(memory.unit === 'K' ? memory.value / 1024 : memory.unit === 'M' ? memory.value : memory.value / 1048576) : null;
+  const phases = ['I/O Read time', 'Parse time', 'Bind time', 'ResolveModule time'].filter(k => diagnostics[k]).map(k => `${k.replace(' time', '')} ${secondsText(diagnostics[k].value)}s`);
+  const loadSeconds = total - check;
+  const programFiles = graph.files.size;
+  const summary = [
+    `The program has ${programFiles} files: ${dependencyFiles} in node_modules (${megabytes(dependencyBytes)} MB of source), ${libraryFiles} compiler library files and ${projectFiles} of your own. Check time is ${secondsText(check)}s of ${secondsText(total)}s.` +
+      `${memoryMegabytes != null ? ` Memory used ${memoryMegabytes} MB.` : ''}${phases.length ? ` Phases: ${phases.join(', ')}.` : ''}`,
+    `Largest packages by files: ${top.map(p => `${p.name} ${p.files} (${p.megabytes} MB)`).join(', ')}.`,
+    `${leadName} is the file that brings ${lead.files} of these files (${megabytes(lead.bytes)} MB). No other import reaches them.` + (importedBy.length ? ` Imported by ${importedBy.join(', ')}.` : ''),
+    `Shortest import chain: ${chainSummary(chain)}`
+  ].map(clean);
+  return { pattern: 'program-load', confidence: 'measured',
+    title: `Program load: ${dependencyFiles} dependency files, ${top[0].name} has ${top[0].files}; Check time is ${secondsText(check)}s of ${secondsText(total)}s`,
+    location: { file: leadName, line: 1, character: 1 }, milliseconds: loadSeconds * 1000, checkTimeShareUpperBoundPercent: null,
+    evidence: { programFiles, dependencyFiles, libraryFiles, projectFiles, dependencyMegabytes: megabytes(dependencyBytes),
+      checkSeconds: check, totalSeconds: total, memoryMegabytes, packages: top, entry: entryName,
+      lead: { file: leadName, filesOnlyThroughIt: lead.files, megabytesOnlyThroughIt: megabytes(lead.bytes), importedBy, chain },
+      location: { file: leadName }, thresholds: { ...PROGRAM_LOAD }, summary,
+      details: [...summary, ...chain.map((f, i) => `chain ${i + 1}: ${f}`)] },
+    remedy: `The files of ${leadName} enter the program only through it. skipLibCheck does not remove them: it skips checking them, not loading them. ` +
+      `See why ${top[0].name} needs that file. Use a narrower entry point of the package if it has one, or tell its maintainers about the chain. Measure Files and Memory used again after each change.`,
+    docs: PERFORMANCE_DOCS };
+}
+
 export function buildDiagnoses(context) {
-  if (!context.signals) return [];
-  const list = [recursionDiagnosis(context), varianceDiagnosis(context.signals, context.describe, context.checkSeconds)].filter(Boolean);
+  const list = [];
+  // Program load needs no trace signal: it reads the import graph and the compiler counters.
+  if (context.graph && context.diagnostics) list.push(programLoadDiagnosis(context));
+  if (context.signals) list.push(recursionDiagnosis(context), varianceDiagnosis(context.signals, context.describe, context.checkSeconds));
   // A recursion diagnosis comes first: the compiler already reported an error for it.
-  return list.sort((a, b) => (b.pattern === 'recursive-type-instantiation') - (a.pattern === 'recursive-type-instantiation') || b.milliseconds - a.milliseconds).slice(0, MAX_DIAGNOSES);
+  return list.filter(Boolean).sort((a, b) => (b.pattern === 'recursive-type-instantiation') - (a.pattern === 'recursive-type-instantiation') || b.milliseconds - a.milliseconds).slice(0, MAX_DIAGNOSES);
 }
