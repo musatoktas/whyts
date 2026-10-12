@@ -9,6 +9,14 @@
 
 A small CLI that turns compiler diagnostics, traces, and import relationships into evidence you can act on. It says where the check is slow, and for two known patterns it also says why and what to do. No account, API key, or LLM required.
 
+```sh
+npx whyts
+```
+
+Run it in the folder of your `tsconfig.json`. It runs the real compiler once and prints at most three actions. To prove that a type change helped, use `npx whyts compare` (see below). To give the same evidence to an AI coding agent, use `claude mcp add --transport stdio whyts -- npx -y whyts-mcp`.
+
+Found with whyts: a 7.4 s type check that went to 0.06 s (TanStack Form) and `vue-tsc` going from 80 s to 0.56 s (Vue). See [Real cases](#real-cases).
+
 ![whyts terminal report](docs/demo.svg)
 
 ## Try it
@@ -19,7 +27,7 @@ Requires Node.js 20+ and a TypeScript project with dependencies installed.
 npx whyts --project .
 ```
 
-For repeatable runs, pin a version: `npx whyts@0.8.2 --project .`
+For repeatable runs, pin a version: `npx whyts@0.8.3 --project .`
 
 To run from a checkout:
 
@@ -36,7 +44,7 @@ node src/cli.js --project /path/to/your/tsconfig.json
 By default, whyts prints at most three actions and one summary line. Each action has a pattern, a location, a short remedy and a link. The image above is a recorded run. Use `--verbose` for the full report.
 
 ```text
-whyts 0.7.0 · TypeScript 5.9.3 · repro-project/tsconfig.json
+whyts 0.8.2 · TypeScript 5.9.3 · repro-project/tsconfig.json
 
 1. [measured] Recursive type instantiation: DeepKeys<Values>
    Where: k.ts:4:17
@@ -45,13 +53,13 @@ whyts 0.7.0 · TypeScript 5.9.3 · repro-project/tsconfig.json
    DeepKeysAndValuesImpl refers to itself: DeepKeysAndValuesImpl -> DeepKeyAndValueArray -> DeepKeysAndValuesImpl.
    Type argument JsonData (k.ts:2): JsonData refers to itself.
    Fix: Stop the expansion of DeepKeysAndValuesImpl when it meets a type it already visited. Or add a depth limit to it. Check that the fix keeps the same results.
-   Cost: 10875.5 ms, at most 99.4% of Check time (upper bound, not a saving)
+   Cost: 13118 ms, at most 99.5% of Check time (upper bound, not a saving)
    Docs: https://github.com/microsoft/TypeScript/wiki/Performance
 
-Check 10.94s · Total 11.21s · 65 files · 1 compiler error · 1 finding in the full report. Use --verbose to see them.
+Check 13.18s · Total 13.55s · 65 files · 1 compiler error · 1 finding in the full report. Use --verbose to see them.
 ```
 
-Two patterns have a remedy in 0.7. Each one was seen in a real project before it was added.
+Two patterns have a remedy. Each one was seen in a real project before it was added.
 
 | Pattern | Trace evidence | Remedy |
 | --- | --- | --- |
@@ -66,6 +74,19 @@ Rules:
 - In the compact report, a slow check without a known pattern shows only above 3% of Check time. A check that a diagnosis already explains by type name is not listed twice.
 - The trace events exist in TypeScript 5.9, 6.0 and 7.0 (`instantiateType_DepthLimit`, `getVariancesWorker`). In TypeScript 7 they carry a `checkerId`, and whyts uses one checker, so the type ids stay unique.
 - Remedies are short instructions. They name a direction. whyts did not measure any remedy on your project.
+
+## Real cases
+
+whyts found the place in each case below. The fixes are open pull requests in those projects, so they are proposals until the maintainers merge them. Each number comes from my own measurement on the stated compiler version.
+
+| Project | What whyts found | Result |
+| --- | --- | --- |
+| tRPC ([#6997](https://github.com/trpc/trpc/issues/6997)) | TS2589 in `Serialize` (`serialize.ts:35`) when the type contains a recursive JSON type such as `Prisma.JsonValue` | A fix in [PR #7660](https://github.com/trpc/trpc/pull/7660). The repro had TS2589 on main and has no error with the fix. Instantiations went from 89,700 to 78,502. The type-check time of `packages/server` did not change (within noise) |
+| TanStack Form ([#1474](https://github.com/TanStack/form/issues/1474)) | TS2589 in `DeepKeys`: the type alias refers to itself through `DeepKeyAndValueArray` | A fix in [PR #2422](https://github.com/TanStack/form/pull/2422). Check time of the repro went from 7.4 s to 0.06 s (`whyts compare`, 10 runs, separated). `form-core` stayed within noise |
+| TypeORM ([#8559](https://github.com/typeorm/typeorm/issues/8559)) | TS2589 in `QueryDeepPartialEntity` (`QueryPartialEntity.ts:17`) for types that contain themselves | A fix in [PR #12943](https://github.com/typeorm/typeorm/pull/12943). whyts reports the diagnosis before the change and reports none after it |
+| Vue ([#14323](https://github.com/vuejs/core/issues/14323)) | `defineModel` with a `defineEmits` call signature that ends in `void` makes `OverloadUnionRecursive` (`@vue/shared`) run to the depth limit. It is 100% of the Check time | A fix in [PR #15851](https://github.com/vuejs/core/pull/15851). `vue-tsc` with 1, 2 and 3 emits went from 31.1, 55.3 and 80.0 s to 0.42, 0.49 and 0.56 s (TypeScript 5.9.3). A component with 40 overloads and a model still hits TS2589, as it did before |
+| Hono ([#2399](https://github.com/honojs/hono/issues/2399)) | TS2589 in `JSONParsed` (`src/utils/types.ts:53`) with a recursive JSON type | A fix that stops at a visited type, in [issue #5543](https://github.com/honojs/hono/issues/5543). A depth limit made the `.d.ts` output 313,638 bytes; the fix keeps it at 762 bytes |
+| node-redis ([#2975](https://github.com/redis/node-redis/issues/2975)) | 4.1 s of a 4.3 s check in one structural comparison of two `RedisClusterType` instantiations | Measurements from 4.7.0 to 6.3.0 in [a comment](https://github.com/redis/node-redis/issues/2975#issuecomment-6081025083) |
 
 ## What it finds
 
@@ -328,7 +349,7 @@ The server runs the TypeScript compiler of the project that you name, as `tsc` d
 
 The MCP packages (`@modelcontextprotocol/server` and `zod`) are not dependencies of whyts. `npm install whyts` installs only `typescript`, as before. The package `whyts-mcp` has the same version as `whyts` and depends on that exact version. The command `whyts mcp` still works. If the MCP packages are missing, it prints `npx -y whyts-mcp`.
 
-Alternative, if you want to start the server from the `whyts` package: `npx -y -p whyts@0.8.2 -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp`.
+Alternative, if you want to start the server from the `whyts` package: `npx -y -p whyts@0.8.3 -p @modelcontextprotocol/server@2 -p zod@4 whyts mcp`.
 
 ## Options for large projects
 
