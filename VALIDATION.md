@@ -1,3 +1,20 @@
+# v0.8.4 validation
+
+0.8.4 adds the diagnosis `program-load` and reads `typeof import('pkg')` in declaration files as an import edge. `whyts`, `whyts-mcp` and `server.json` have the version 0.8.4.
+
+Measured on 2026-10-12 in GitHub Actions: the workflow `ci.yml` on pull request 20, and `vuetify-23005-whyts.yml` in musatoktas/oss-olcum (run 38275162305, the branch packed with `npm pack`, TypeScript 5.9.3, Node.js 22). In the project `import { createVuetify } from "vuetify"`:
+
+| Project | Files | Check time | Total time | `program-load` |
+| --- | --- | --- | --- | --- |
+| vuetify 4.2.4 | 480 | 0.01 s | 4.22 s | yes: 421 dependency files, `lib/framework.d.ts` |
+| vuetify 3.8.12 | 412 | 0.01 s | 3.19 s | yes: 353 dependency files |
+| vuetify 3.7.19 | 73 | 0.01 s | 1.82 s | no |
+| vuetify 4.2.4, `GlobalComponents` emptied | 111 | 0.01 s | 1.18 s | no |
+| empty project | 59 | 0.00 s | 0.65 s | no |
+| `vue` only | 69 | 0.10 s | 1.17 s | no |
+
+The tests of the pattern are in `test/program-load.test.js`. The pull request has 8 more tests than main (121 before, 129 after). Total time on a shared runner varies from run to run (vuetify 4.2.4 gave 2.5 s to 5.1 s in other runs), so the limit on Total time is low (1.5 s) and the other limits do the work.
+
 # v0.8.2 validation
 
 0.8.2 changes no code. It changes the release workflows only.
