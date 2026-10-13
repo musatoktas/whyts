@@ -44,7 +44,7 @@ node src/cli.js --project /path/to/your/tsconfig.json
 By default, whyts prints at most three actions and one summary line. Each action has a pattern, a location, a short remedy and a link. The image above is a recorded run. Use `--verbose` for the full report.
 
 ```text
-whyts 0.8.2 · TypeScript 5.9.3 · repro-project/tsconfig.json
+whyts 0.8.4 · TypeScript 5.9.3 · repro-project/tsconfig.json
 
 1. [measured] Recursive type instantiation: DeepKeys<Values>
    Where: k.ts:4:17
@@ -53,10 +53,10 @@ whyts 0.8.2 · TypeScript 5.9.3 · repro-project/tsconfig.json
    DeepKeysAndValuesImpl refers to itself: DeepKeysAndValuesImpl -> DeepKeyAndValueArray -> DeepKeysAndValuesImpl.
    Type argument JsonData (k.ts:2): JsonData refers to itself.
    Fix: Stop the expansion of DeepKeysAndValuesImpl when it meets a type it already visited. Or add a depth limit to it. Check that the fix keeps the same results.
-   Cost: 13118 ms, at most 99.5% of Check time (upper bound, not a saving)
+   Cost: 10082.6 ms, at most 98.8% of Check time (upper bound, not a saving)
    Docs: https://github.com/microsoft/TypeScript/wiki/Performance
 
-Check 13.18s · Total 13.55s · 65 files · 1 compiler error · 1 finding in the full report. Use --verbose to see them.
+Check 10.20s · Total 10.80s · 65 files · 1 compiler error · 2 findings in the full report. Use --verbose to see them.
 ```
 
 Three patterns have a remedy. Each one was seen in a real project before it was added.
