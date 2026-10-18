@@ -44,7 +44,7 @@ node src/cli.js --project /path/to/your/tsconfig.json
 By default, whyts prints at most three actions and one summary line. Each action has a pattern, a location, a short remedy and a link. The image above is a recorded run. Use `--verbose` for the full report.
 
 ```text
-whyts 0.8.4 · TypeScript 5.9.3 · repro-project/tsconfig.json
+whyts 0.8.5 · TypeScript 5.9.3 · repro-project/tsconfig.json
 
 1. [measured] Recursive type instantiation: DeepKeys<Values>
    Where: k.ts:4:17
