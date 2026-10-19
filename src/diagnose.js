@@ -233,6 +233,75 @@ function selfContainingArguments(graph, base, index, error) {
   return { text: clean(text.slice(0, 120)), found: found.slice(0, 3) };
 }
 
+// Type parameters of the declaration named at an error position whose constraint gives a generic type fewer type arguments
+// than it declares. The omitted ones take their defaults. The checker of the graph program only resolves names here.
+function partialConstraints(graph, base, error) {
+  if (!error?.file || !error.line || !graph.program) return [];
+  const source = findSource(path.resolve(base, error.file), graph);
+  if (!source) return [];
+  const { ts } = graph;
+  const pos = source.getPositionOfLineAndCharacter(error.line - 1, Math.max(0, (error.character ?? 1) - 1));
+  const site = nodeAt(ts, source, pos).reverse().find(n => (ts.isTypeReferenceNode(n) || ts.isExpressionWithTypeArguments(n) || ts.isTypeQueryNode(n)) &&
+    n.typeArguments?.length && n.getStart(source) === pos);
+  if (!site) return [];
+  const checker = graph.checker ??= graph.program.getTypeChecker();
+  const declarationsOf = name => {
+    const id = ts.isQualifiedName(name) ? name.right : ts.isPropertyAccessExpression(name) ? name.name : name;
+    let symbol = checker.getSymbolAtLocation(id);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    return symbol?.declarations ?? [];
+  };
+  const text = node => clean(node.getText().replace(/\s+/g, ' ').trim().slice(0, 120));
+  const where = node => {
+    const file = node.getSourceFile(), at = file.getLineAndCharacterOfPosition(node.getStart(file));
+    return { file: display(base, path.resolve(file.fileName)), line: at.line + 1, character: at.character + 1 };
+  };
+  const found = [];
+  const name = ts.isTypeReferenceNode(site) ? site.typeName : ts.isTypeQueryNode(site) ? site.exprName : site.expression;
+  for (const decl of declarationsOf(name)) {
+    // A generic function type in a variable declaration: declare const f: <T extends X>(...) => R.
+    for (const parameter of decl.typeParameters ?? decl.type?.typeParameters ?? []) {
+      const constraint = parameter.constraint;
+      if (!constraint || !ts.isTypeReferenceNode(constraint)) continue;
+      const given = constraint.typeArguments?.length ?? 0;
+      for (const target of declarationsOf(constraint.typeName)) {
+        if (!(ts.isClassDeclaration(target) || ts.isInterfaceDeclaration(target) || ts.isTypeAliasDeclaration(target)) || !target.name) continue;
+        const declared = target.typeParameters ?? [];
+        const missing = declared.slice(given);
+        if (!missing.length || missing.some(p => !p.default)) continue;
+        found.push({ typeParameter: clean(parameter.name.text), constraint: text(constraint), location: where(constraint),
+          generic: clean(target.name.text), genericLocation: where(target), given, declared: declared.length,
+          missing: missing.map(p => ({ name: clean(p.name.text), default: text(p.default),
+            modifiers: (p.modifiers ?? []).map(m => m.getText()).filter(m => m === 'in' || m === 'out') })) });
+      }
+    }
+  }
+  return found.slice(0, 3);
+}
+
+function partialConstraintDiagnosis({ site, siteLocation, siteText, partial, owners, depth, milliseconds, share }) {
+  const { typeParameter, generic, given, declared, location } = partial;
+  const names = partial.missing.map(m => m.name);
+  const atLimit = owners.filter(o => o.alias === generic).map(o => o.typeName);
+  const inDependency = location.file.split('/').includes('node_modules');
+  const summary = [`${site.code} at this place: ${site.message}`,
+    `The constraint of ${typeParameter} is ${partial.constraint} (${location.file}:${location.line}). ${generic} declares ${declared} type parameters. The constraint gives ${given}.`,
+    `The omitted ${names.join(', ')} take${names.length === 1 ? 's its default' : ' their defaults'}: ${partial.missing.map(m => `${m.name} = ${m.default}${m.modifiers.length ? ` (${m.modifiers.join(' ')})` : ''}`).join(', ')}.`,
+    `The compiler hit the instantiation limit inside ${generic}${atLimit.length ? `, at ${[...new Set(atLimit)].join(', ')}` : ''}.`].map(clean);
+  const details = [...summary, ...owners.map(o => `type #${o.typeId} ${o.typeName}: ${o.events} limit events, depth ${o.maxDepth}${o.alias ? `, inside ${o.alias}` : ''}`),
+    ...(depth?.maxInstantiationCount ? [`largest instantiation count in the events: ${depth.maxInstantiationCount}`] : [])];
+  return { pattern: 'partial-constraint', confidence: 'measured',
+    title: `Constraint gives ${given} of ${declared} type arguments to ${generic}${siteText ? `: ${siteText}` : ''}`,
+    location: siteLocation, milliseconds, checkTimeShareUpperBoundPercent: share,
+    evidence: { event: depth?.events ? depth.event : null, compilerError: site, expression: siteText, typeParameter, constraint: partial.constraint,
+      location, generic, genericLocation: partial.genericLocation, given, declared, missing: partial.missing,
+      limitEvents: depth?.events ?? 0, maxInstantiationCount: depth?.maxInstantiationCount ?? 0, types: owners, milliseconds, summary, details },
+    remedy: `Give all ${declared} type arguments of ${generic} in the constraint of ${typeParameter}, for example any for each. ` +
+      `The constraint is at ${location.file}:${location.line}. ` +
+      (inDependency ? 'It is in a dependency, so tell its maintainers. ' : '') + 'Measure again after the change.',
+    docs: PERFORMANCE_DOCS };
+}
+
 const chainText = names => names.join(' -> ');
 const selfText = (name, cycle) => cycle.length === 2 ? `${name} refers to itself.` : `${name} refers to itself: ${chainText(cycle)}.`;
 
@@ -258,6 +327,11 @@ function recursionDiagnosis({ signals, describe, checkSeconds, graph, base, comp
   const interval = siteLocation && ((intervals?.sourceGroups ?? []).find(g => g.file === siteLocation.file && g.line === siteLocation.line) ??
     (intervals?.projectHotspots ?? []).find(h => h.file === siteLocation.file));
   const milliseconds = interval?.milliseconds ?? 0;
+  // The limit was hit inside the generic type that a constraint at the error site names with too few type arguments.
+  const partial = graph ? partialConstraints(graph, base, site).find(p => owners.some(o => o.alias === p.generic &&
+    o.aliasLocation?.file === p.genericLocation.file)) : null;
+  if (partial) return partialConstraintDiagnosis({ site, siteLocation, siteText, partial, owners, depth, milliseconds,
+    share: interval ? share(milliseconds, checkSeconds) : null });
   const name = lead?.alias ?? lead?.typeName ?? null;
   const summary = [];
   if (site) summary.push(`${site.code} at this place: ${site.message}`);
@@ -464,6 +538,7 @@ export function buildDiagnoses(context) {
   // Program load needs no trace signal: it reads the import graph and the compiler counters.
   if (context.graph && context.diagnostics) list.push(programLoadDiagnosis(context));
   if (context.signals) list.push(recursionDiagnosis(context), varianceDiagnosis(context.signals, context.describe, context.checkSeconds));
-  // A recursion diagnosis comes first: the compiler already reported an error for it.
-  return list.filter(Boolean).sort((a, b) => (b.pattern === 'recursive-type-instantiation') - (a.pattern === 'recursive-type-instantiation') || b.milliseconds - a.milliseconds).slice(0, MAX_DIAGNOSES);
+  // A diagnosis of a TS2589 error comes first: the compiler already reported an error for it.
+  const first = d => d.pattern === 'recursive-type-instantiation' || d.pattern === 'partial-constraint';
+  return list.filter(Boolean).sort((a, b) => first(b) - first(a) || b.milliseconds - a.milliseconds).slice(0, MAX_DIAGNOSES);
 }

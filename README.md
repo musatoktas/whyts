@@ -59,11 +59,12 @@ whyts 0.8.5 · TypeScript 5.9.3 · repro-project/tsconfig.json
 Check 10.20s · Total 10.80s · 65 files · 1 compiler error · 2 findings in the full report. Use --verbose to see them.
 ```
 
-Three patterns have a remedy. Each one was seen in a real project before it was added.
+Four patterns have a remedy. Each one was seen in a real project before it was added.
 
 | Pattern | Trace evidence | Remedy |
 | --- | --- | --- |
 | `recursive-type-instantiation` | A TS2589 error and the `instantiateType_DepthLimit` events. whyts finds the type alias that owns the type parameters at the limit, a reference cycle by name between aliases, and a type argument that refers to itself | Stop the expansion on a type that was visited, or add a depth limit |
+| `partial-constraint` | A TS2589 error at a type reference, and `instantiateType_DepthLimit` events inside a generic type. A type parameter of the referenced declaration has a constraint that gives that generic type fewer type arguments than it declares, so the omitted ones take their defaults | Give all type arguments in the constraint, for example `any` for each. If the constraint is in a dependency, tell its maintainers |
 | `variance-computation` | `getVariancesWorker` events with the type id, the number of type parameters and the result. whyts reports the outermost events, the largest nested ones, and their union time | Reduce type parameters, simplify return types. An `in` or `out` annotation is not a guaranteed fix |
 | `program-load` | The program is big, and the check is not. The compiler counters (Total time, Check time, Memory used, parse and bind time) and the import graph. whyts reports the files from `node_modules`, the largest packages, the file that brings most of them, and the `typeof import()` references that bring them | Use a narrower entry point, or ask the maintainers of the package to move the references to an opt-in entry point. `skipLibCheck` does not help: it skips checking, not loading |
 
