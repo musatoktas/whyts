@@ -1,3 +1,13 @@
+# v0.8.6 validation
+
+0.8.6 adds the diagnosis `partial-constraint`: a constraint gives a generic type fewer type arguments than it declares, the omitted parameters take their defaults, and the check of that constraint hits TS2589. `whyts`, `whyts-mcp` and `server.json` have the version 0.8.6.
+
+Measured on 2026-10-19 in GitHub Actions: the workflow `ci.yml` on pull request 22 (run 39217354251, all jobs passed), and `eden-274-whyts.yml` in musatoktas/oss-olcum (run 39216804435, the branch of pull request 22, TypeScript 5.9.3). The project is an Elysia 2.0.0-beta.30 app with 64 plugins and `Treaty.Create<App>` from @elysia/eden 2.0.0-beta.6 (elysiajs/eden#274). 0.8.5 reported `recursive-type-instantiation` and told the user to stop the expansion of `Elysia`. 0.8.6 reports `partial-constraint`: "Constraint gives 7 of 8 type arguments to Elysia", with the place of the constraint in the Eden declaration files and the omitted parameter `Volatile`. A constraint with 8 `any` compiles in the same app. The fix that applies this remedy is elysiajs/eden#275.
+
+The tests are in `test/diagnose.test.js`. The fixture `test/fixtures/diagnose/ts59-partial-constraint.json` holds 6 events from the real trace. A control case with all 8 arguments keeps the diagnosis `recursive-type-instantiation`.
+
+Not covered: `ReturnType<typeof treaty<App>>` fails at 90 plugins for a separate reason (the instantiation expression), and whyts still reports `recursive-type-instantiation` there.
+
 # v0.8.4 validation
 
 0.8.4 adds the diagnosis `program-load` and reads `typeof import('pkg')` in declaration files as an import edge. `whyts`, `whyts-mcp` and `server.json` have the version 0.8.4.
