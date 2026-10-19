@@ -127,6 +127,87 @@ test('parseCompilerErrors lists TS2589 sites for the diagnosis, even beyond the 
   assert.deepEqual(parsed.excessiveDepth, [{ file: 'k.ts', line: 4, character: 17, code: 'TS2589', message: 'Type instantiation is excessively deep and possibly infinite.' }]);
 });
 
+// Partial constraint. ts59-partial-constraint.json holds the depth-limit events and their descriptors from a real trace of an
+// Elysia 2.0.0-beta.30 app with 64 plugins and Treaty.Create<App> of @elysia/eden 2.0.0-beta.6 (elysiajs/eden issue 274,
+// typescript 5.9.3, captured on 2026-10-19). The declaration positions are rewritten to the stub files below.
+const elysiaBase = `type DefaultEphemeral = { derive: {} }
+type DefaultMetadata = { macro: {} }
+declare class Elysia<const in out BasePath extends string = '', const in out Scope extends string = 'local', const in out Singleton = {}, const in out Definitions = {},
+  const in out Metadata = DefaultMetadata, const in out Routes = {}, const in out Ephemeral = DefaultEphemeral, const in out Volatile = DefaultEphemeral> {
+  '~Routes': Routes;
+  '~Ephemeral': Ephemeral;
+  use<const NewElysia extends Elysia<any, any, any, any, any, any, any, any>>(plugin: NewElysia): Elysia<BasePath, Scope, Singleton, Definitions, Metadata,
+    Routes & NewElysia['~Routes'], Ephemeral, Volatile & NewElysia['~Ephemeral']>;
+}
+export { Elysia }
+`;
+const edenIndex = anys => `import type { Elysia } from 'elysia';
+export declare namespace Treaty {
+    type Create<App extends Elysia<${anys}>> = App extends { '~Routes': infer Schema } ? Schema : never;
+}
+export declare const treaty: <const App extends Elysia<${anys}>>(domain: string) => Treaty.Create<App>;
+`;
+
+function partialProject(t, { anys = 7, client = 'export declare const client: Treaty.Create<App>', at = '3,30' } = {}) {
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-partial-')));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const files = {
+    'node_modules/elysia/package.json': '{ "name": "elysia", "version": "0.0.0", "types": "dist/index.d.ts" }',
+    'node_modules/elysia/dist/index.d.ts': "export { Elysia } from './base'\n",
+    'node_modules/elysia/dist/base.d.ts': elysiaBase,
+    'node_modules/@elysia/eden/package.json': '{ "name": "@elysia/eden", "version": "0.0.0", "types": "dist/index.d.ts" }',
+    'node_modules/@elysia/eden/dist/index.d.ts': edenIndex(Array(anys).fill('any').join(', ')),
+    'src/api.ts': "import { Elysia } from 'elysia'\nexport declare const app: Elysia<'/api/v1'>\nexport type App = typeof app\n",
+    'src/client.ts': `import { treaty, type Treaty } from '@elysia/eden'\nimport type { App } from './api'\n${client}\n`,
+    'tsconfig.json': JSON.stringify({ compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, target: 'ES2022', module: 'ESNext',
+      moduleResolution: 'Bundler', types: [] }, include: ['src'] })
+  };
+  for (const [name, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(base, name)), { recursive: true });
+    fs.writeFileSync(path.join(base, name), text);
+  }
+  const graph = buildGraph(ts, readProject(base, ts));
+  const fixture = readFixture('ts59-partial-constraint.json', base);
+  return buildDiagnoses({ signals: collectSignals(fixture.events), describe: typeDescriber(fixture.types, base, graph), checkSeconds: 4, graph, base,
+    compilerErrors: parseCompilerErrors(`src/client.ts(${at}): error TS2589: Type instantiation is excessively deep and possibly infinite.`, 5, base),
+    intervals: { sourceGroups: [{ file: 'src/client.ts', line: 3, milliseconds: 136 }], projectHotspots: [] } });
+}
+
+test('partial constraint: the constraint at the TS2589 site names 7 of the 8 type parameters of the class at the limit', t => {
+  const diagnoses = partialProject(t);
+  assert.equal(diagnoses.length, 1);
+  const d = diagnoses[0];
+  assert.equal(d.pattern, 'partial-constraint');
+  assert.equal(d.confidence, 'measured');
+  assert.deepEqual(d.location, { file: 'src/client.ts', line: 3, character: 30 });
+  assert.equal(d.title, 'Constraint gives 7 of 8 type arguments to Elysia: Treaty.Create<App>');
+  assert.equal(d.evidence.typeParameter, 'App');
+  assert.equal(d.evidence.constraint, 'Elysia<any, any, any, any, any, any, any>');
+  assert.deepEqual(d.evidence.location, { file: 'node_modules/@elysia/eden/dist/index.d.ts', line: 3, character: 29 });
+  assert.deepEqual(d.evidence.genericLocation, { file: 'node_modules/elysia/dist/base.d.ts', line: 3, character: 1 });
+  assert.deepEqual(d.evidence.missing, [{ name: 'Volatile', default: 'DefaultEphemeral', modifiers: ['in', 'out'] }]);
+  assert.equal(d.evidence.limitEvents, 6);
+  assert.ok(d.evidence.types.some(o => o.typeName === 'Volatile' && o.alias === 'Elysia'));
+  assert.match(d.evidence.summary.join('\n'), /The omitted Volatile takes its default: Volatile = DefaultEphemeral \(in out\)\./);
+  assert.match(d.remedy, /^Give all 8 type arguments of Elysia in the constraint of App, for example any for each\. /);
+  assert.match(d.remedy, /node_modules\/@elysia\/eden\/dist\/index\.d\.ts:3\. It is in a dependency, so tell its maintainers\./);
+  assert.equal(d.milliseconds, 136);
+  assert.equal(d.checkTimeShareUpperBoundPercent, 3.4);
+});
+
+test('partial constraint: a generic function type in a variable declaration (typeof treaty<App>)', t => {
+  const [d] = partialProject(t, { client: 'export type C = typeof treaty<App>', at: '3,17' });
+  assert.equal(d.pattern, 'partial-constraint');
+  assert.equal(d.title, 'Constraint gives 7 of 8 type arguments to Elysia: typeof treaty<App>');
+  assert.deepEqual(d.evidence.location, { file: 'node_modules/@elysia/eden/dist/index.d.ts', line: 5, character: 49 });
+});
+
+test('partial constraint: a constraint with all type arguments keeps the recursion diagnosis', t => {
+  const [d] = partialProject(t, { anys: 8 });
+  assert.equal(d.pattern, 'recursive-type-instantiation');
+  assert.equal(d.evidence.typeAlias, 'Elysia');
+});
+
 // Variance diagnosis. The descriptors give the real type ids of the drizzle-orm trace a name and a declaration.
 function varianceCase(t, { scale = 1, declare = true } = {}) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-var-')));
@@ -185,6 +266,7 @@ test('remedies follow the instruction length rule: at most 20 words per sentence
   const texts = [diagnoseRecursion(t, 'ts59').diagnoses[0].remedy];
   const v = varianceCase(t);
   texts.push(buildDiagnoses({ signals: v.signals, describe: v.describe, checkSeconds: 7, graph: v.graph, base: v.base })[0].remedy);
+  texts.push(partialProject(t)[0].remedy);
   for (const text of texts) for (const sentence of sentences(text)) assert.ok(sentence.split(/\s+/).length <= 20, sentence);
 });
 

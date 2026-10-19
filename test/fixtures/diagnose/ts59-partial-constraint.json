@@ -1,0 +1,148 @@
+{
+ "events": [
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 2946251.779,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 95,
+    "instantiationDepth": 100,
+    "instantiationCount": 149
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 2946496.8170000003,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 63897,
+    "instantiationDepth": 100,
+    "instantiationCount": 150
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 2947251.3800000004,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 95,
+    "instantiationDepth": 100,
+    "instantiationCount": 149
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 2947305.191,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 63897,
+    "instantiationDepth": 100,
+    "instantiationCount": 150
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 2947504.54,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 95,
+    "instantiationDepth": 100,
+    "instantiationCount": 149
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 2947526.503,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 63897,
+    "instantiationDepth": 100,
+    "instantiationCount": 150
+   }
+  }
+ ],
+ "types": [
+  {
+   "id": 95,
+   "symbolName": "Volatile",
+   "recursionId": 82,
+   "firstDeclaration": {
+    "path": "{{base}}/node_modules/elysia/dist/base.d.ts",
+    "start": {
+     "line": 4,
+     "character": 113
+    },
+    "end": {
+     "line": 4,
+     "character": 134
+    }
+   },
+   "flags": [
+    "TypeParameter",
+    "IncludesMissingType"
+   ]
+  },
+  {
+   "id": 63740,
+   "symbolName": "NewElysia",
+   "recursionId": 23370,
+   "firstDeclaration": {
+    "path": "{{base}}/node_modules/elysia/dist/base.d.ts",
+    "start": {
+     "line": 7,
+     "character": 7
+    },
+    "end": {
+     "line": 7,
+     "character": 77
+    }
+   },
+   "flags": [
+    "TypeParameter",
+    "IncludesMissingType"
+   ]
+  },
+  {
+   "id": 63895,
+   "recursionId": 23424,
+   "flags": [
+    "StringLiteral"
+   ],
+   "display": "\"~Ephemeral\""
+  },
+  {
+   "id": 63897,
+   "recursionId": 23390,
+   "indexedAccessObjectType": 63740,
+   "indexedAccessIndexType": 63895,
+   "flags": [
+    "IndexedAccess",
+    "IncludesWildcard"
+   ]
+  }
+ ]
+}
