@@ -149,7 +149,7 @@ export declare const treaty: <const App extends Elysia<${anys}>>(domain: string)
 `;
 
 function partialProject(t, { anys = 7, client = 'export declare const client: Treaty.Create<App>', at = '3,30' } = {}) {
-  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-partial-')));
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-partial-')));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const files = {
     'node_modules/elysia/package.json': '{ "name": "elysia", "version": "0.0.0", "types": "dist/index.d.ts" }',
