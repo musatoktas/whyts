@@ -93,11 +93,11 @@ Rules:
 
 ## Real cases
 
-whyts found the place in each case below. The fixes are open pull requests in those projects, so they are proposals until the maintainers merge them. The Vuetify row is a measurement in an issue, with no fix. Each number comes from my own measurement on the stated compiler version.
+whyts found the place in each case below. The tRPC fix is merged. The other fixes are open pull requests in those projects, so they are proposals until the maintainers merge them. The Vuetify row is a measurement in an issue, with no fix. Each number comes from my own measurement on the stated compiler version.
 
 | Project | What whyts found | Result |
 | --- | --- | --- |
-| tRPC ([#6997](https://github.com/trpc/trpc/issues/6997)) | TS2589 in `Serialize` (`serialize.ts:35`) when the type contains a recursive JSON type such as `Prisma.JsonValue` | A fix in [PR #7660](https://github.com/trpc/trpc/pull/7660). The repro had TS2589 on main and has no error with the fix. Instantiations went from 89,700 to 78,502. The type-check time of `packages/server` did not change (within noise) |
+| tRPC ([#6997](https://github.com/trpc/trpc/issues/6997)) | TS2589 in `Serialize` (`serialize.ts:35`) when the type contains a recursive JSON type such as `Prisma.JsonValue` | A fix in [PR #7660](https://github.com/trpc/trpc/pull/7660), merged on 2026-10-19. The repro had TS2589 on main and has no error with the fix. Instantiations went from 89,700 to 78,502. The type-check time of `packages/server` did not change (within noise) |
 | TanStack Form ([#1474](https://github.com/TanStack/form/issues/1474)) | TS2589 in `DeepKeys`: the type alias refers to itself through `DeepKeyAndValueArray` | A fix in [PR #2422](https://github.com/TanStack/form/pull/2422). Check time of the repro went from 7.4 s to 0.06 s (`whyts compare`, 10 runs, separated). `form-core` stayed within noise |
 | TypeORM ([#8559](https://github.com/typeorm/typeorm/issues/8559)) | TS2589 in `QueryDeepPartialEntity` (`QueryPartialEntity.ts:17`) for types that contain themselves | A fix in [PR #12943](https://github.com/typeorm/typeorm/pull/12943). whyts reports the diagnosis before the change and reports none after it |
 | Vue ([#14323](https://github.com/vuejs/core/issues/14323)) | `defineModel` with a `defineEmits` call signature that ends in `void` makes `OverloadUnionRecursive` (`@vue/shared`) run to the depth limit. It is 100% of the Check time | A fix in [PR #15851](https://github.com/vuejs/core/pull/15851). `vue-tsc` with 1, 2 and 3 emits went from 31.1, 55.3 and 80.0 s to 0.42, 0.49 and 0.56 s (TypeScript 5.9.3). A component with 40 overloads and a model still hits TS2589, as it did before |
