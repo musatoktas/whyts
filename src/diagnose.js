@@ -269,7 +269,7 @@ function partialConstraints(graph, base, error) {
         const declared = target.typeParameters ?? [];
         const missing = declared.slice(given);
         if (!missing.length || missing.some(p => !p.default)) continue;
-        found.push({ typeParameter: clean(parameter.name.text), constraint: text(constraint), location: where(constraint),
+        found.push({ expression: text(site), typeParameter: clean(parameter.name.text), constraint: text(constraint), location: where(constraint),
           generic: clean(target.name.text), genericLocation: where(target), given, declared: declared.length,
           missing: missing.map(p => ({ name: clean(p.name.text), default: text(p.default),
             modifiers: (p.modifiers ?? []).map(m => m.getText()).filter(m => m === 'in' || m === 'out') })) });
@@ -279,8 +279,8 @@ function partialConstraints(graph, base, error) {
   return found.slice(0, 3);
 }
 
-function partialConstraintDiagnosis({ site, siteLocation, siteText, partial, owners, depth, milliseconds, share }) {
-  const { typeParameter, generic, given, declared, location } = partial;
+function partialConstraintDiagnosis({ site, siteLocation, partial, owners, depth, milliseconds, share }) {
+  const { expression, typeParameter, generic, given, declared, location } = partial;
   const names = partial.missing.map(m => m.name);
   const atLimit = owners.filter(o => o.alias === generic).map(o => o.typeName);
   const inDependency = location.file.split('/').includes('node_modules');
@@ -291,9 +291,9 @@ function partialConstraintDiagnosis({ site, siteLocation, siteText, partial, own
   const details = [...summary, ...owners.map(o => `type #${o.typeId} ${o.typeName}: ${o.events} limit events, depth ${o.maxDepth}${o.alias ? `, inside ${o.alias}` : ''}`),
     ...(depth?.maxInstantiationCount ? [`largest instantiation count in the events: ${depth.maxInstantiationCount}`] : [])];
   return { pattern: 'partial-constraint', confidence: 'measured',
-    title: `Constraint gives ${given} of ${declared} type arguments to ${generic}${siteText ? `: ${siteText}` : ''}`,
+    title: `Constraint gives ${given} of ${declared} type arguments to ${generic}: ${expression}`,
     location: siteLocation, milliseconds, checkTimeShareUpperBoundPercent: share,
-    evidence: { event: depth?.events ? depth.event : null, compilerError: site, expression: siteText, typeParameter, constraint: partial.constraint,
+    evidence: { event: depth?.events ? depth.event : null, compilerError: site, expression, typeParameter, constraint: partial.constraint,
       location, generic, genericLocation: partial.genericLocation, given, declared, missing: partial.missing,
       limitEvents: depth?.events ?? 0, maxInstantiationCount: depth?.maxInstantiationCount ?? 0, types: owners, milliseconds, summary, details },
     remedy: `Give all ${declared} type arguments of ${generic} in the constraint of ${typeParameter}, for example any for each. ` +
@@ -330,7 +330,7 @@ function recursionDiagnosis({ signals, describe, checkSeconds, graph, base, comp
   // The limit was hit inside the generic type that a constraint at the error site names with too few type arguments.
   const partial = graph ? partialConstraints(graph, base, site).find(p => owners.some(o => o.alias === p.generic &&
     o.aliasLocation?.file === p.genericLocation.file)) : null;
-  if (partial) return partialConstraintDiagnosis({ site, siteLocation, siteText, partial, owners, depth, milliseconds,
+  if (partial) return partialConstraintDiagnosis({ site, siteLocation, partial, owners, depth, milliseconds,
     share: interval ? share(milliseconds, checkSeconds) : null });
   const name = lead?.alias ?? lead?.typeName ?? null;
   const summary = [];
