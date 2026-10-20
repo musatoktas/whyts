@@ -338,6 +338,92 @@ test('builder chain: a short chain, and a method that does not take the class, k
   assert.equal(routes.pattern, 'recursive-type-instantiation', 'get takes a path, so groups joined with get are not possible');
 });
 
+// Nested declaration. ts59-nested-declaration.json holds 8 depth-limit events of a real trace of a consumer that reads
+// `type Batch = v.InferOutput<typeof BatchSchema>` from the .d.ts of a package, where BatchSchema is 20 nested v.strictObject()
+// calls (valibot 1.5.0, musatoktas/oss-olcum schema-nest, run 39420807165, typescript 5.9.3, captured on 2026-10-20). The
+// declaration positions are rewritten to the stub below. In that setup the limit was hit from 14 levels on with tsc 5.9.3, 6.0.3
+// and tsgo. The same schema read from source, and the schema annotated with hand-written interfaces, had no error up to 32 levels.
+const valibotBase = `interface BaseSchema<TInput, TOutput> { readonly '~types'?: { readonly input: TInput; readonly output: TOutput } | undefined }
+type ObjectEntries = Record<string, BaseSchema<unknown, unknown>>
+interface OptionalEntryShape { readonly type: 'optional' }
+type OptionalOutputKeys<TEntries extends ObjectEntries> = { [TKey in keyof TEntries]: TEntries[TKey] extends OptionalEntryShape ? TKey : never }[keyof TEntries]
+type InferEntriesOutput<TEntries extends ObjectEntries> = { -readonly [TKey in keyof TEntries]: InferOutput<TEntries[TKey]> }
+type InferObjectOutput<TEntries extends ObjectEntries> = Omit<InferEntriesOutput<TEntries>, OptionalOutputKeys<TEntries>>
+export interface StringSchema<TMessage> extends BaseSchema<string, string> { readonly message: TMessage }
+export interface StrictObjectSchema<TEntries extends ObjectEntries, TMessage> extends BaseSchema<InferObjectOutput<TEntries>, InferObjectOutput<TEntries>> {
+  readonly entries: TEntries; readonly message: TMessage }
+export type InferOutput<TSchema extends BaseSchema<unknown, unknown>> = NonNullable<TSchema['~types']>['output']
+export interface GenericSchema<TOutput = unknown> extends BaseSchema<unknown, TOutput> {}
+`;
+const nestedSchema = levels => levels ? `v.StrictObjectSchema<{ readonly f: v.StringSchema<undefined>; readonly next: ${nestedSchema(levels - 1)} }, undefined>`
+  : 'v.StringSchema<undefined>';
+const nestedApi = levels => `import * as v from 'valibot'\nexport declare const BatchSchema: ${nestedSchema(levels)};\nexport type Batch = v.InferOutput<typeof BatchSchema>;\n`;
+
+function nestedProject(t, { api = nestedApi(15), apiFile = 'api/dist/index.d.ts', from = '../api/dist/index.js', consumer, at = '2,25' } = {}) {
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-nested-')));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const files = {
+    'node_modules/valibot/package.json': '{ "name": "valibot", "version": "0.0.0", "types": "dist/index.d.ts" }',
+    'node_modules/valibot/dist/index.d.ts': valibotBase,
+    [apiFile]: api,
+    'src/index.ts': consumer ?? `import { type Batch } from '${from}'\nexport declare const b: Batch;\n`,
+    'tsconfig.json': JSON.stringify({ compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, target: 'ES2022', module: 'ESNext',
+      moduleResolution: 'Bundler', types: [] }, include: ['src'] })
+  };
+  for (const [name, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(base, name)), { recursive: true });
+    fs.writeFileSync(path.join(base, name), text);
+  }
+  const graph = buildGraph(ts, readProject(base, ts));
+  const fixture = readFixture('ts59-nested-declaration.json', base);
+  return buildDiagnoses({ signals: collectSignals(fixture.events), describe: typeDescriber(fixture.types, base, graph), checkSeconds: 0.11, graph, base,
+    compilerErrors: parseCompilerErrors(`src/index.ts(${at}): error TS2589: Type instantiation is excessively deep and possibly infinite.`, 2, base),
+    intervals: { sourceGroups: [{ file: 'src/index.ts', line: Number(at.split(',')[0]), milliseconds: 102 }], projectHotspots: [] } });
+}
+
+test('nested declaration: a schema type written out 15 levels deep in a .d.ts gets hand-written types, not a recursion remedy', t => {
+  const diagnoses = nestedProject(t);
+  assert.equal(diagnoses.length, 1);
+  const d = diagnoses[0];
+  assert.equal(d.pattern, 'nested-declaration');
+  assert.equal(d.confidence, 'measured');
+  assert.deepEqual(d.location, { file: 'src/index.ts', line: 2, character: 25 });
+  assert.equal(d.title, 'StrictObjectSchema nested 15 levels deep in the declared type of BatchSchema');
+  assert.equal(d.evidence.levels, 15);
+  assert.deepEqual(d.evidence.location, { file: 'api/dist/index.d.ts', line: 2, character: 22 });
+  assert.equal(d.evidence.limitEvents, 8);
+  assert.ok(d.evidence.types.some(o => o.alias === 'StrictObjectSchema'), 'the limit events are inside StrictObjectSchema, as in the trace');
+  assert.equal(d.evidence.summary[1], 'The type at this place comes from BatchSchema (api/dist/index.d.ts:2). Its declared type nests StrictObjectSchema 15 levels deep.');
+  assert.equal(d.remedy, 'Write the data type of BatchSchema by hand as named interfaces. In the source, annotate BatchSchema with a type that names them. ' +
+    'Then api/dist/index.d.ts refers to the names and does not write out the 15 levels. Measure again after the change.');
+  assert.equal(d.milliseconds, 102);
+});
+
+test('nested declaration: typeof at the error site and a declaration in a dependency', t => {
+  const [d] = nestedProject(t, { apiFile: 'node_modules/@repro/api/index.d.ts',
+    consumer: "import * as v from 'valibot'\nimport { BatchSchema } from '@repro/api'\nexport type B = v.InferOutput<typeof BatchSchema>\n", at: '3,17' });
+  assert.equal(d.pattern, 'nested-declaration');
+  assert.deepEqual(d.evidence.location, { file: 'node_modules/@repro/api/index.d.ts', line: 2, character: 22 });
+  assert.match(d.remedy, / The declaration is in a dependency, so tell its maintainers\. Measure again after the change\.$/);
+});
+
+test('nested declaration: an error at the name of a class is followed through the interface it implements', t => {
+  // valibot#1518 reports TS2589 at the class name: class MemoryKeeper implements Keeper, where Keeper takes a Batch.
+  const [d] = nestedProject(t, { api: `${nestedApi(15)}export interface Keeper { accept(input: Batch): Promise<void>; }\n`,
+    consumer: "import type { Keeper } from '../api/dist/index.js'\nclass MemoryKeeper implements Keeper {\n  async accept(): Promise<void> {}\n}\nexport { MemoryKeeper }\n",
+    at: '2,7' });
+  assert.equal(d.pattern, 'nested-declaration');
+  assert.equal(d.evidence.name, 'BatchSchema');
+  assert.equal(d.evidence.levels, 15);
+});
+
+test('nested declaration: a shallow type, and a nested type in a source file, keep the recursion diagnosis', t => {
+  const [shallow] = nestedProject(t, { api: nestedApi(4) });
+  assert.equal(shallow.pattern, 'recursive-type-instantiation');
+  const [source] = nestedProject(t, { apiFile: 'src/api.ts', api: nestedApi(15), from: './api.js' });
+  assert.equal(source.pattern, 'recursive-type-instantiation', 'a source file has no written-out inferred type');
+});
+
 // Variance diagnosis. The descriptors give the real type ids of the drizzle-orm trace a name and a declaration.
 function varianceCase(t, { scale = 1, declare = true } = {}) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-var-')));
@@ -399,6 +485,7 @@ test('remedies follow the instruction length rule: at most 20 words per sentence
   texts.push(partialProject(t)[0].remedy);
   texts.push(expressionProject(t, `${wrap}\nexport type W = ReturnType<typeof wrap<App>>`, '4,17')[0].remedy);
   texts.push(chainProject(t, `export const app = new Elysia({ prefix: '/api/v1' })${calls(128)}\n`, '3,20')[0].remedy);
+  texts.push(nestedProject(t, { apiFile: 'node_modules/@repro/api/index.d.ts', from: '@repro/api' })[0].remedy);
   for (const text of texts) for (const sentence of sentences(text)) assert.ok(sentence.split(/\s+/).length <= 20, sentence);
 });
 
