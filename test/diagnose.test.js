@@ -230,12 +230,13 @@ test('instantiation expression: ReturnType<typeof wrap<App>> gets the conditiona
   assert.equal(d.evidence.argument, 'typeof wrap<App>');
   assert.equal(d.evidence.generic, 'ReturnType');
   assert.match(d.evidence.genericLocation.file, /lib\.es5\.d\.ts$/);
+  assert.match(d.evidence.summary[1], /ReturnType is a conditional type \(lib\.es5\.d\.ts:\d+\)\.$/);
   assert.equal(d.evidence.inline, 'typeof wrap<App> extends (...args: any) => infer R ? R : any');
   assert.equal(d.evidence.returnType, '{ app: A }');
   assert.deepEqual(d.evidence.returnTypeLocation, { file: 'src/client.ts', line: 3, character: 33 });
   assert.equal(d.evidence.limitEvents, 7);
   assert.ok(d.evidence.types.some(o => o.alias === 'Elysia'), 'the limit events are inside Elysia, as in the trace');
-  assert.match(d.evidence.summary.join('\n'), /not in ReturnType: types from src\/p0\.ts, node_modules\/elysia\/dist\/base\.d\.ts\./);
+  assert.match(d.evidence.summary.join('\n'), /not in ReturnType: types from node_modules\/elysia\/dist\/base\.d\.ts, src\/p0\.ts\./);
   assert.equal(d.remedy, 'Write the conditional type of ReturnType in place: typeof wrap<App> extends (...args: any) => infer R ? R : any. ' +
     'Or use the type that wrap returns, { app: A }, from src/client.ts:3. Measure again after the change.');
 });

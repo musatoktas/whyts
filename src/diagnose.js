@@ -356,12 +356,15 @@ function inlineConditional(ts, decl, name, argument) {
   return out.length <= 160 ? clean(out) : null;
 }
 
+// A TypeScript library file is named without its path: the path is the one of the compiler install.
+const libFile = file => /(^|\/)typescript\/lib\/lib\.[^/]+\.d\.ts$/.test(file) ? file.split('/').pop() : file;
+
 function instantiationExpressionDiagnosis({ site, siteLocation, found, owners, depth, milliseconds, share }) {
   const { expression, argument, instantiation, generic, genericLocation, inline } = found;
   const files = [...new Set(owners.map(o => o.location?.file).filter(Boolean))].slice(0, 3);
   const summary = [`${site.code} at this place: ${site.message}`,
     `The type argument ${argument} is an instantiation expression${argument === instantiation ? '' : ` (${instantiation})`}. ` +
-      `${generic} is a conditional type (${genericLocation.file}:${genericLocation.line}).`,
+      `${generic} is a conditional type (${libFile(genericLocation.file)}:${genericLocation.line}).`,
     `The compiler hit the instantiation limit in types that the expression brings, not in ${generic}${files.length ? `: types from ${files.join(', ')}` : ''}.`].map(clean);
   const details = [...summary, ...owners.map(o => `type #${o.typeId} ${o.typeName}: ${o.events} limit events, depth ${o.maxDepth}${o.alias ? `, inside ${o.alias}` : ''}`),
     ...(depth?.maxInstantiationCount ? [`largest instantiation count in the events: ${depth.maxInstantiationCount}`] : [])];
