@@ -407,6 +407,16 @@ test('nested declaration: typeof at the error site and a declaration in a depend
   assert.match(d.remedy, / The declaration is in a dependency, so tell its maintainers\. Measure again after the change\.$/);
 });
 
+test('nested declaration: an error at the name of a class is followed through the interface it implements', t => {
+  // valibot#1518 reports TS2589 at the class name: class MemoryKeeper implements Keeper, where Keeper takes a Batch.
+  const [d] = nestedProject(t, { api: `${nestedApi(15)}export interface Keeper { accept(input: Batch): Promise<void>; }\n`,
+    consumer: "import type { Keeper } from '../api/dist/index.js'\nclass MemoryKeeper implements Keeper {\n  async accept(): Promise<void> {}\n}\nexport { MemoryKeeper }\n",
+    at: '2,7' });
+  assert.equal(d.pattern, 'nested-declaration');
+  assert.equal(d.evidence.name, 'BatchSchema');
+  assert.equal(d.evidence.levels, 15);
+});
+
 test('nested declaration: a shallow type, and a nested type in a source file, keep the recursion diagnosis', t => {
   const [shallow] = nestedProject(t, { api: nestedApi(4) });
   assert.equal(shallow.pattern, 'recursive-type-instantiation');

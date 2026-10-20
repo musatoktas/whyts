@@ -477,7 +477,11 @@ function nestedDeclaration(graph, base, error, aliases) {
   if (!source) return null;
   const { ts } = graph;
   const pos = source.getPositionOfLineAndCharacter(error.line - 1, Math.max(0, (error.character ?? 1) - 1));
-  const site = nodeAt(ts, source, pos).reverse().find(n => (ts.isTypeReferenceNode(n) || ts.isTypeQueryNode(n)) && n.getStart(source) === pos);
+  // The error is at a type, or at the name of a declaration (class C implements I reports it at C).
+  const nodes = nodeAt(ts, source, pos).reverse().filter(n => n.getStart(source) === pos);
+  const declaration = n => ts.isClassDeclaration(n) || ts.isInterfaceDeclaration(n) || ts.isTypeAliasDeclaration(n) || ts.isVariableDeclaration(n) || ts.isFunctionDeclaration(n);
+  const site = nodes.find(n => ts.isTypeReferenceNode(n) || ts.isTypeQueryNode(n)) ??
+    nodes.find(n => ts.isIdentifier(n) && n.parent?.name === n && declaration(n.parent))?.parent;
   if (!site) return null;
   const checker = graph.checker ??= graph.program.getTypeChecker();
   const declarationsOf = name => {
@@ -507,8 +511,13 @@ function nestedDeclaration(graph, base, error, aliases) {
       }
       continue;
     }
-    if (ts.isTypeReferenceNode(node)) {
-      for (const decl of declarationsOf(node.typeName)) if (ts.isTypeAliasDeclaration(decl) && !seen.has(decl)) { seen.add(decl); queue.push(decl.type); }
+    // Follow aliases and interfaces (also those that a class implements) outside the compiler library files.
+    const target = ts.isTypeReferenceNode(node) ? node.typeName : ts.isExpressionWithTypeArguments(node) ? node.expression : null;
+    if (target && (ts.isIdentifier(target) || ts.isQualifiedName(target) || ts.isPropertyAccessExpression(target))) {
+      for (const decl of declarationsOf(ts.isPropertyAccessExpression(target) ? target.name : target)) {
+        if (seen.has(decl) || !(ts.isTypeAliasDeclaration(decl) || ts.isInterfaceDeclaration(decl)) || graph.program.isSourceFileDefaultLibrary(decl.getSourceFile())) continue;
+        seen.add(decl); queue.push(ts.isTypeAliasDeclaration(decl) ? decl.type : decl);
+      }
     }
     ts.forEachChild(node, child => { queue.push(child); });
   }
