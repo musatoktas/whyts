@@ -148,7 +148,7 @@ export declare namespace Treaty {
 export declare const treaty: <const App extends Elysia<${anys}>>(domain: string) => Treaty.Create<App>;
 `;
 
-function partialProject(t, { anys = 7, client = 'export declare const client: Treaty.Create<App>', at = '3,30' } = {}) {
+function partialProject(t, { anys = 7, client = 'export declare const client: Treaty.Create<App>', at = '3,30', fixture: fixtureName = 'ts59-partial-constraint.json', files: extra = {} } = {}) {
   const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-partial-')));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const files = {
@@ -160,14 +160,15 @@ function partialProject(t, { anys = 7, client = 'export declare const client: Tr
     'src/api.ts': "import { Elysia } from 'elysia'\nexport declare const app: Elysia<'/api/v1'>\nexport type App = typeof app\n",
     'src/client.ts': `import { treaty, type Treaty } from '@elysia/eden'\nimport type { App } from './api'\n${client}\n`,
     'tsconfig.json': JSON.stringify({ compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, target: 'ES2022', module: 'ESNext',
-      moduleResolution: 'Bundler', types: [] }, include: ['src'] })
+      moduleResolution: 'Bundler', types: [] }, include: ['src'] }),
+    ...extra
   };
   for (const [name, text] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(base, name)), { recursive: true });
     fs.writeFileSync(path.join(base, name), text);
   }
   const graph = buildGraph(ts, readProject(base, ts));
-  const fixture = readFixture('ts59-partial-constraint.json', base);
+  const fixture = readFixture(fixtureName, base);
   return buildDiagnoses({ signals: collectSignals(fixture.events), describe: typeDescriber(fixture.types, base, graph), checkSeconds: 4, graph, base,
     compilerErrors: parseCompilerErrors(`src/client.ts(${at}): error TS2589: Type instantiation is excessively deep and possibly infinite.`, 5, base),
     intervals: { sourceGroups: [{ file: 'src/client.ts', line: 3, milliseconds: 136 }], projectHotspots: [] } });
@@ -206,6 +207,59 @@ test('partial constraint: a constraint with all type arguments keeps the recursi
   const [d] = partialProject(t, { anys: 8 });
   assert.equal(d.pattern, 'recursive-type-instantiation');
   assert.equal(d.evidence.typeAlias, 'Elysia');
+});
+
+// Instantiation expression. ts59-instantiation-expression.json holds depth-limit events and their descriptors from a real trace of
+// the same Elysia app with 90 plugins, with the Eden constraints given 8 type arguments, and the type
+// ReturnType<typeof wrap<App>> where wrap is declare function wrap<A>(a: A): { app: A } (typescript 5.9.3, captured on 2026-10-20).
+// In that app ReturnType<typeof wrap<App>> hit TS2589 and the same conditional type written in place did not.
+// The limit events are on hook objects of src/p0.ts and on type parameters of Elysia, as in the trace.
+const wrap = 'declare function wrap<A>(a: A): { app: A }';
+const hookFile = { 'src/p0.ts': "import type { Elysia } from 'elysia'\nexport declare const p0: Elysia<'/p0'>\nexport const hooks = [{ params: 'id' },\n  { body: 'name' }]\n" };
+const expressionProject = (t, client, at, options = {}) =>
+  partialProject(t, { anys: 8, client, at, fixture: 'ts59-instantiation-expression.json', files: hookFile, ...options });
+
+test('instantiation expression: ReturnType<typeof wrap<App>> gets the conditional type in place, not a recursion remedy', t => {
+  const diagnoses = expressionProject(t, `${wrap}\nexport type W = ReturnType<typeof wrap<App>>`, '4,17');
+  assert.equal(diagnoses.length, 1);
+  const d = diagnoses[0];
+  assert.equal(d.pattern, 'instantiation-expression');
+  assert.equal(d.confidence, 'measured');
+  assert.deepEqual(d.location, { file: 'src/client.ts', line: 4, character: 17 });
+  assert.equal(d.title, 'Instantiation expression given to a conditional type: ReturnType<typeof wrap<App>>');
+  assert.equal(d.evidence.argument, 'typeof wrap<App>');
+  assert.equal(d.evidence.generic, 'ReturnType');
+  assert.match(d.evidence.genericLocation.file, /lib\.es5\.d\.ts$/);
+  assert.equal(d.evidence.inline, 'typeof wrap<App> extends (...args: any) => infer R ? R : any');
+  assert.equal(d.evidence.returnType, '{ app: A }');
+  assert.deepEqual(d.evidence.returnTypeLocation, { file: 'src/client.ts', line: 3, character: 33 });
+  assert.equal(d.evidence.limitEvents, 7);
+  assert.ok(d.evidence.types.some(o => o.alias === 'Elysia'), 'the limit events are inside Elysia, as in the trace');
+  assert.match(d.evidence.summary.join('\n'), /not in ReturnType: types from src\/p0\.ts, node_modules\/elysia\/dist\/base\.d\.ts\./);
+  assert.equal(d.remedy, 'Write the conditional type of ReturnType in place: typeof wrap<App> extends (...args: any) => infer R ? R : any. ' +
+    'Or use the type that wrap returns, { app: A }, from src/client.ts:3. Measure again after the change.');
+});
+
+test('instantiation expression: through a type alias, given to Parameters', t => {
+  const [d] = expressionProject(t, `${wrap}\ntype F = typeof wrap<App>\nexport type P = Parameters<F>`, '5,17');
+  assert.equal(d.pattern, 'instantiation-expression');
+  assert.equal(d.evidence.argument, 'F');
+  assert.equal(d.evidence.instantiation, 'typeof wrap<App>');
+  assert.equal(d.evidence.inline, 'F extends (...args: infer P) => any ? P : never');
+  assert.match(d.evidence.summary[1], /^The type argument F is an instantiation expression \(typeof wrap<App>\)\. Parameters is a conditional type/);
+  assert.doesNotMatch(d.remedy, /Or use the type/, 'only ReturnType has a declared type to use instead');
+});
+
+test('instantiation expression: the Eden form ReturnType<typeof treaty<App>> names the declared return type', t => {
+  const [d] = expressionProject(t, 'export type C = ReturnType<typeof treaty<App>>', '3,17');
+  assert.equal(d.pattern, 'instantiation-expression');
+  assert.equal(d.evidence.returnType, 'Treaty.Create<App>');
+  assert.deepEqual(d.evidence.returnTypeLocation, { file: 'node_modules/@elysia/eden/dist/index.d.ts', line: 5, character: 116 });
+});
+
+test('instantiation expression: a type alias that is not a conditional type keeps the recursion diagnosis', t => {
+  const [d] = expressionProject(t, `${wrap}\ntype Box<T> = { value: T }\nexport type W = Box<typeof wrap<App>>`, '5,17');
+  assert.equal(d.pattern, 'recursive-type-instantiation');
 });
 
 // Variance diagnosis. The descriptors give the real type ids of the drizzle-orm trace a name and a declaration.
@@ -267,6 +321,7 @@ test('remedies follow the instruction length rule: at most 20 words per sentence
   const v = varianceCase(t);
   texts.push(buildDiagnoses({ signals: v.signals, describe: v.describe, checkSeconds: 7, graph: v.graph, base: v.base })[0].remedy);
   texts.push(partialProject(t)[0].remedy);
+  texts.push(expressionProject(t, `${wrap}\nexport type W = ReturnType<typeof wrap<App>>`, '4,17')[0].remedy);
   for (const text of texts) for (const sentence of sentences(text)) assert.ok(sentence.split(/\s+/).length <= 20, sentence);
 });
 
