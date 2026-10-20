@@ -1,3 +1,19 @@
+# v0.8.8 validation
+
+0.8.8 adds the diagnosis `builder-chain`: the TS2589 site starts a chain of method calls, followed back through variables, the method called most often takes and returns a class and is called at least 32 times, and the depth-limit events are inside that class. `whyts`, `whyts-mcp` and `server.json` have the version 0.8.8.
+
+Measured on 2026-10-20 in GitHub Actions, in musatoktas/oss-olcum `elysia-chain.yml`, on an Elysia 2.0.0-beta.30 app whose plugins are joined with `.use()` (tsc 5.9.3 and tsgo 7.0.0-dev.20260707.2 gave the same errors). Run 39388000077:
+
+| Shape | 90 plugins | 100 plugins | 128 plugins | 256 plugins |
+| --- | --- | --- | --- | --- |
+| one chain, 1 or 8 routes per plugin | no error | TS2589 | TS2589 | TS2589 |
+| the same chain cut into 2 or 4 variables | no error | TS2589 | TS2589 | TS2589 |
+| 4 groups, each its own `Elysia`, joined with `.use()` | no error | no error | no error | no error |
+
+The variables did not change the instantiation count. The groups had fewer instantiations than the chain (128 plugins, 8 routes: 973,639 against 1,310,496 with tsc).
+
+0.8.7 reported `recursive-type-instantiation` with "Stop the expansion of Elysia" (run 39388012312). The branch of pull request 27 reported `builder-chain` for one chain of 128 calls (run 39389254395) and for 100 calls across 4 statements (run 39389736622), and no TS2589 diagnosis for the groups (run 39389744833). The tests are in `test/diagnose.test.js`; the fixture `test/fixtures/diagnose/ts59-builder-chain.json` holds 9 events of the real trace. A chain of 20 calls and a chain of a method that does not take the class keep `recursive-type-instantiation`. `ci.yml` passed on pull request 27.
+
 # v0.8.7 validation
 
 0.8.7 adds the diagnosis `instantiation-expression`: a type argument is an instantiation expression (`typeof f<T>`), it is given to a type alias whose body is a conditional type (`ReturnType`, `Parameters`), and resolving that alias hits TS2589. `whyts`, `whyts-mcp` and `server.json` have the version 0.8.7.
