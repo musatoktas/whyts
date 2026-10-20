@@ -1,0 +1,180 @@
+{
+ "events": [
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 918845.571,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 207,
+    "instantiationDepth": 100,
+    "instantiationCount": 319
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 920206.013,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 207,
+    "instantiationDepth": 100,
+    "instantiationCount": 320
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 920900.3770000001,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 207,
+    "instantiationDepth": 100,
+    "instantiationCount": 364
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 920993.0160000001,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 574,
+    "instantiationDepth": 100,
+    "instantiationCount": 367
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 921211.8520000001,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 568,
+    "instantiationDepth": 100,
+    "instantiationCount": 371
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 921220.8409999999,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 574,
+    "instantiationDepth": 100,
+    "instantiationCount": 371
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 921228.892,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 568,
+    "instantiationDepth": 100,
+    "instantiationCount": 371
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 921236.814,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 574,
+    "instantiationDepth": 100,
+    "instantiationCount": 371
+   }
+  }
+ ],
+ "types": [
+  {
+   "id": 207,
+   "symbolName": "TEntries$1",
+   "firstDeclaration": {
+    "path": "{{base}}/node_modules/valibot/dist/index.d.ts",
+    "start": {
+     "line": 8,
+     "character": 37
+    },
+    "end": {
+     "line": 8,
+     "character": 45
+    }
+   },
+   "flags": [
+    "TypeParameter",
+    "IncludesMissingType"
+   ]
+  },
+  {
+   "id": 568,
+   "symbolName": "InferEntriesOutput",
+   "aliasTypeArguments": [
+    207
+   ],
+   "firstDeclaration": {
+    "path": "{{base}}/node_modules/valibot/dist/index.d.ts",
+    "start": {
+     "line": 5,
+     "character": 6
+    },
+    "end": {
+     "line": 5,
+     "character": 24
+    }
+   },
+   "flags": [
+    "Object"
+   ]
+  },
+  {
+   "id": 574,
+   "symbolName": "OptionalOutputKeys",
+   "aliasTypeArguments": [
+    207
+   ],
+   "firstDeclaration": {
+    "path": "{{base}}/node_modules/valibot/dist/index.d.ts",
+    "start": {
+     "line": 4,
+     "character": 6
+    },
+    "end": {
+     "line": 4,
+     "character": 24
+    }
+   },
+   "flags": [
+    "IndexedAccess",
+    "IncludesWildcard"
+   ]
+  }
+ ]
+}

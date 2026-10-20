@@ -464,6 +464,79 @@ function builderChainDiagnosis({ site, siteLocation, chain, owners, depth, milli
     docs: PERFORMANCE_DOCS };
 }
 
+// A value declared with a written type in a declaration file, reached from the type at an error position through type aliases
+// and typeof, whose type nests one of the types at the limit many levels deep. A declaration file writes an inferred type out in
+// full; read back, the levels are expanded one inside the other in one instantiation.
+export const NESTED_DECLARATION = {
+  minLevels: 8   // fewer levels than this are not reported
+};
+
+function nestedDeclaration(graph, base, error, aliases) {
+  if (!error?.file || !error.line || !graph.program || !aliases.size) return null;
+  const source = findSource(path.resolve(base, error.file), graph);
+  if (!source) return null;
+  const { ts } = graph;
+  const pos = source.getPositionOfLineAndCharacter(error.line - 1, Math.max(0, (error.character ?? 1) - 1));
+  const site = nodeAt(ts, source, pos).reverse().find(n => (ts.isTypeReferenceNode(n) || ts.isTypeQueryNode(n)) && n.getStart(source) === pos);
+  if (!site) return null;
+  const checker = graph.checker ??= graph.program.getTypeChecker();
+  const declarationsOf = name => {
+    let symbol = checker.getSymbolAtLocation(ts.isQualifiedName(name) ? name.right : name);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    return symbol?.declarations ?? [];
+  };
+  const nameOf = typeName => ts.isQualifiedName(typeName) ? typeName.right.text : typeName.text;
+  const levels = (node, name) => {
+    let deepest = 0;
+    ts.forEachChild(node, child => { deepest = Math.max(deepest, levels(child, name)); });
+    return deepest + (ts.isTypeReferenceNode(node) && nameOf(node.typeName) === name ? 1 : 0);
+  };
+  const queue = [site], seen = new Set();
+  let best = null;
+  for (let i = 0; i < queue.length && i < 500; i++) {
+    const node = queue[i];
+    if (ts.isTypeQueryNode(node)) {
+      for (const decl of declarationsOf(node.exprName)) {
+        const file = decl.getSourceFile();
+        if (seen.has(decl) || !ts.isVariableDeclaration(decl) || !decl.type || !file.isDeclarationFile || graph.program.isSourceFileDefaultLibrary(file)) continue;
+        seen.add(decl);
+        for (const generic of aliases) {
+          const n = levels(decl.type, generic);
+          if (n >= NESTED_DECLARATION.minLevels && n > (best?.levels ?? 0)) best = { decl, generic, levels: n };
+        }
+      }
+      continue;
+    }
+    if (ts.isTypeReferenceNode(node)) {
+      for (const decl of declarationsOf(node.typeName)) if (ts.isTypeAliasDeclaration(decl) && !seen.has(decl)) { seen.add(decl); queue.push(decl.type); }
+    }
+    ts.forEachChild(node, child => { queue.push(child); });
+  }
+  if (!best) return null;
+  const file = best.decl.getSourceFile(), at = file.getLineAndCharacterOfPosition(best.decl.getStart(file));
+  return { name: clean(best.decl.name.getText(file)), generic: clean(best.generic), levels: best.levels,
+    location: { file: display(base, path.resolve(file.fileName)), line: at.line + 1, character: at.character + 1 } };
+}
+
+function nestedDeclarationDiagnosis({ site, siteLocation, nested, owners, depth, milliseconds, share }) {
+  const { name, generic, levels, location } = nested;
+  const inDependency = location.file.split('/').includes('node_modules');
+  const summary = [`${site.code} at this place: ${site.message}`,
+    `The type at this place comes from ${name} (${location.file}:${location.line}). Its declared type nests ${generic} ${levels} levels deep.`,
+    `A declaration file writes an inferred type out in full. The compiler hit the instantiation limit inside ${generic} when it read the levels back.`].map(clean);
+  const details = [...summary, ...owners.map(o => `type #${o.typeId} ${o.typeName}: ${o.events} limit events, depth ${o.maxDepth}${o.alias ? `, inside ${o.alias}` : ''}`),
+    ...(depth?.maxInstantiationCount ? [`largest instantiation count in the events: ${depth.maxInstantiationCount}`] : [])];
+  return { pattern: 'nested-declaration', confidence: 'measured',
+    title: `${generic} nested ${levels} levels deep in the declared type of ${name}`,
+    location: siteLocation, milliseconds, checkTimeShareUpperBoundPercent: share,
+    evidence: { event: depth?.events ? depth.event : null, compilerError: site, name, generic, levels, location,
+      limitEvents: depth?.events ?? 0, maxInstantiationCount: depth?.maxInstantiationCount ?? 0, types: owners, milliseconds, summary, details },
+    remedy: `Write the data type of ${name} by hand as named interfaces. In the source, annotate ${name} with a type that names them. ` +
+      `Then ${location.file} refers to the names and does not write out the ${levels} levels. ` +
+      (inDependency ? 'The declaration is in a dependency, so tell its maintainers. ' : '') + 'Measure again after the change.',
+    docs: PERFORMANCE_DOCS };
+}
+
 const chainText = names => names.join(' -> ');
 const selfText = (name, cycle) => cycle.length === 2 ? `${name} refers to itself.` : `${name} refers to itself: ${chainText(cycle)}.`;
 
@@ -501,6 +574,10 @@ function recursionDiagnosis({ signals, describe, checkSeconds, graph, base, comp
   // The limit was hit inside the class that a long chain of plugin calls at the error site builds.
   const chain = graph ? builderChain(graph, base, site) : null;
   if (chain && owners.some(o => o.alias === chain.className)) return builderChainDiagnosis({ site, siteLocation, chain, owners, depth, milliseconds,
+    share: interval ? share(milliseconds, checkSeconds) : null });
+  // The limit was hit inside a type that the declaration file of a value at the error site writes out many levels deep.
+  const nested = graph ? nestedDeclaration(graph, base, site, new Set(owners.map(o => o.alias).filter(Boolean))) : null;
+  if (nested) return nestedDeclarationDiagnosis({ site, siteLocation, nested, owners, depth, milliseconds,
     share: interval ? share(milliseconds, checkSeconds) : null });
   const name = lead?.alias ?? lead?.typeName ?? null;
   const summary = [];
@@ -709,6 +786,6 @@ export function buildDiagnoses(context) {
   if (context.graph && context.diagnostics) list.push(programLoadDiagnosis(context));
   if (context.signals) list.push(recursionDiagnosis(context), varianceDiagnosis(context.signals, context.describe, context.checkSeconds));
   // A diagnosis of a TS2589 error comes first: the compiler already reported an error for it.
-  const first = d => ['recursive-type-instantiation', 'partial-constraint', 'instantiation-expression', 'builder-chain'].includes(d.pattern);
+  const first = d => ['recursive-type-instantiation', 'partial-constraint', 'instantiation-expression', 'builder-chain', 'nested-declaration'].includes(d.pattern);
   return list.filter(Boolean).sort((a, b) => first(b) - first(a) || b.milliseconds - a.milliseconds).slice(0, MAX_DIAGNOSES);
 }
