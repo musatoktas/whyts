@@ -1,3 +1,19 @@
+# v0.8.9 validation
+
+0.8.9 adds the diagnosis `nested-declaration`: the TS2589 site is a type or the name of a declaration, type aliases, interfaces and `typeof` lead from it to a variable with a written type in a declaration file, that type nests a generic type of the depth-limit events at least 8 levels deep. `whyts`, `whyts-mcp` and `server.json` have the version 0.8.9.
+
+Measured on 2026-10-20 in GitHub Actions, in musatoktas/oss-olcum `schema-nest.yml`, on an `api` package built with `declaration: true` and a consumer of `type Batch = InferOutput<typeof BatchSchema>`, where `BatchSchema` is nested `strictObject()` calls (the shape of valibot#1518). Run 39420801318, valibot 1.5.0 and zod 4.6.7, tsc 5.9.3 and 6.0.3, tsgo 7.0.0-dev.20260707.2:
+
+| Consumer reads | valibot, depth 8 to 12 | valibot, depth 14 to 32 | zod, depth 8 to 32 |
+| --- | --- | --- | --- |
+| the `.d.ts` | no error | TS2589 | no error |
+| the source | no error | no error | no error |
+| the `.d.ts` of a schema annotated with hand-written interfaces | no error | no error | no error |
+
+zod has no error because its `.d.ts` writes `/*elided*/ any` after 11 levels. With the annotation the consumer had 0 instantiations.
+
+0.8.8 reported `recursive-type-instantiation` with "Stop the expansion of StrictObjectSchema" (runs 39420807165, 39395276671). The branch of pull request 29 reported `nested-declaration` for the consumer shapes `use` (run 39421638670), `annot` (run 39421651376) and `implements`, where the error is at the class name (runs 39422132603 and 39422139205, the second with the union shape of the issue). The annotated schema had no TS2589 diagnosis (run 39421656349). The tests are in `test/diagnose.test.js`; the fixture `test/fixtures/diagnose/ts59-nested-declaration.json` holds 8 events of the real trace. A shallow type and a nested type in a source file keep `recursive-type-instantiation`. `ci.yml` passed on pull request 29.
+
 # v0.8.8 validation
 
 0.8.8 adds the diagnosis `builder-chain`: the TS2589 site starts a chain of method calls, followed back through variables, the method called most often takes and returns a class and is called at least 32 times, and the depth-limit events are inside that class. `whyts`, `whyts-mcp` and `server.json` have the version 0.8.8.
