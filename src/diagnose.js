@@ -233,17 +233,16 @@ function selfContainingArguments(graph, base, index, error) {
   return { text: clean(text.slice(0, 120)), found: found.slice(0, 3) };
 }
 
-// Type parameters of the declaration named at an error position whose constraint gives a generic type fewer type arguments
-// than it declares. The omitted ones take their defaults. The checker of the graph program only resolves names here.
-function partialConstraints(graph, base, error) {
-  if (!error?.file || !error.line || !graph.program) return [];
+// The node with type arguments that starts at an error position, and helpers that resolve names with the checker of the
+// graph program. The checker only resolves names here.
+function siteNode(graph, base, error, accept) {
+  if (!error?.file || !error.line || !graph.program) return null;
   const source = findSource(path.resolve(base, error.file), graph);
-  if (!source) return [];
+  if (!source) return null;
   const { ts } = graph;
   const pos = source.getPositionOfLineAndCharacter(error.line - 1, Math.max(0, (error.character ?? 1) - 1));
-  const site = nodeAt(ts, source, pos).reverse().find(n => (ts.isTypeReferenceNode(n) || ts.isExpressionWithTypeArguments(n) || ts.isTypeQueryNode(n)) &&
-    n.typeArguments?.length && n.getStart(source) === pos);
-  if (!site) return [];
+  const site = nodeAt(ts, source, pos).reverse().find(n => accept(n) && n.typeArguments?.length && n.getStart(source) === pos);
+  if (!site) return null;
   const checker = graph.checker ??= graph.program.getTypeChecker();
   const declarationsOf = name => {
     const id = ts.isQualifiedName(name) ? name.right : ts.isPropertyAccessExpression(name) ? name.name : name;
@@ -256,6 +255,15 @@ function partialConstraints(graph, base, error) {
     const file = node.getSourceFile(), at = file.getLineAndCharacterOfPosition(node.getStart(file));
     return { file: display(base, path.resolve(file.fileName)), line: at.line + 1, character: at.character + 1 };
   };
+  return { ts, site, declarationsOf, text, where };
+}
+
+// Type parameters of the declaration named at an error position whose constraint gives a generic type fewer type arguments
+// than it declares. The omitted ones take their defaults.
+function partialConstraints(graph, base, error) {
+  const at = siteNode(graph, base, error, n => graph.ts.isTypeReferenceNode(n) || graph.ts.isExpressionWithTypeArguments(n) || graph.ts.isTypeQueryNode(n));
+  if (!at) return [];
+  const { ts, site, declarationsOf, text, where } = at;
   const found = [];
   const name = ts.isTypeReferenceNode(site) ? site.typeName : ts.isTypeQueryNode(site) ? site.exprName : site.expression;
   for (const decl of declarationsOf(name)) {
@@ -302,6 +310,77 @@ function partialConstraintDiagnosis({ site, siteLocation, partial, owners, depth
     docs: PERFORMANCE_DOCS };
 }
 
+// Type arguments at an error position that are instantiation expressions (typeof f<T>, directly or through a type alias),
+// given to a type alias whose body is a conditional type, such as ReturnType or Parameters.
+function instantiationExpressionArguments(graph, base, error) {
+  const at = siteNode(graph, base, error, n => graph.ts.isTypeReferenceNode(n));
+  if (!at) return [];
+  const { ts, site, declarationsOf, text, where } = at;
+  const query = node => {
+    if (ts.isTypeQueryNode(node)) return node.typeArguments?.length ? node : null;
+    if (!ts.isTypeReferenceNode(node) || node.typeArguments?.length) return null;
+    const alias = declarationsOf(node.typeName).find(d => ts.isTypeAliasDeclaration(d) && !d.typeParameters);
+    return alias && ts.isTypeQueryNode(alias.type) && alias.type.typeArguments?.length ? alias.type : null;
+  };
+  const found = [];
+  for (const decl of declarationsOf(site.typeName)) {
+    if (!ts.isTypeAliasDeclaration(decl) || !ts.isConditionalTypeNode(decl.type) || !decl.typeParameters) continue;
+    site.typeArguments.forEach((argument, i) => {
+      const parameter = decl.typeParameters[i], expression = parameter && query(argument);
+      if (!expression) return;
+      const fn = declarationsOf(expression.exprName)[0];
+      const returnType = fn && (ts.isVariableDeclaration(fn) ? fn.type && ts.isFunctionTypeNode(fn.type) ? fn.type.type : null : fn.type ?? null);
+      found.push({ expression: text(site), argument: text(argument), instantiation: text(expression), generic: clean(decl.name.text),
+        genericLocation: where(decl), typeParameter: clean(parameter.name.text), inline: inlineConditional(ts, decl, parameter.name.text, argument),
+        function: text(expression.exprName), returnType: returnType ? text(returnType) : null, returnTypeLocation: returnType ? where(returnType) : null });
+    });
+  }
+  return found.slice(0, 3);
+}
+
+// The conditional body of a type alias with the type parameter replaced by the text of the type argument.
+function inlineConditional(ts, decl, name, argument) {
+  const file = decl.getSourceFile(), body = decl.type, start = body.getStart(file);
+  const uses = [];
+  const visit = node => {
+    if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && node.typeName.text === name && !node.typeArguments) uses.push(node);
+    else ts.forEachChild(node, visit);
+  };
+  visit(body);
+  let out = file.text.slice(start, body.end);
+  const replacement = argument.getText();
+  for (const use of uses.sort((a, b) => b.getStart(file) - a.getStart(file))) {
+    out = out.slice(0, use.getStart(file) - start) + replacement + out.slice(use.end - start);
+  }
+  out = out.replace(/\s+/g, ' ').trim();
+  return out.length <= 160 ? clean(out) : null;
+}
+
+// A TypeScript library file is named without its path: the path is the one of the compiler install.
+const libFile = file => /(^|\/)typescript\/lib\/lib\.[^/]+\.d\.ts$/.test(file) ? file.split('/').pop() : file;
+
+function instantiationExpressionDiagnosis({ site, siteLocation, found, owners, depth, milliseconds, share }) {
+  const { expression, argument, instantiation, generic, genericLocation, inline } = found;
+  const files = [...new Set(owners.map(o => o.location?.file).filter(Boolean))].slice(0, 3);
+  const summary = [`${site.code} at this place: ${site.message}`,
+    `The type argument ${argument} is an instantiation expression${argument === instantiation ? '' : ` (${instantiation})`}. ` +
+      `${generic} is a conditional type (${libFile(genericLocation.file)}:${genericLocation.line}).`,
+    `The compiler hit the instantiation limit in types that the expression brings, not in ${generic}${files.length ? `: types from ${files.join(', ')}` : ''}.`].map(clean);
+  const details = [...summary, ...owners.map(o => `type #${o.typeId} ${o.typeName}: ${o.events} limit events, depth ${o.maxDepth}${o.alias ? `, inside ${o.alias}` : ''}`),
+    ...(depth?.maxInstantiationCount ? [`largest instantiation count in the events: ${depth.maxInstantiationCount}`] : [])];
+  const direct = generic === 'ReturnType' && found.returnType
+    ? `Or use the type that ${found.function} returns, ${found.returnType}, from ${found.returnTypeLocation.file}:${found.returnTypeLocation.line}. ` : '';
+  return { pattern: 'instantiation-expression', confidence: 'measured',
+    title: `Instantiation expression given to a conditional type: ${expression}`,
+    location: siteLocation, milliseconds, checkTimeShareUpperBoundPercent: share,
+    evidence: { event: depth?.events ? depth.event : null, compilerError: site, expression, argument, instantiation, generic, genericLocation,
+      typeParameter: found.typeParameter, inline, function: found.function, returnType: found.returnType, returnTypeLocation: found.returnTypeLocation,
+      limitEvents: depth?.events ?? 0, maxInstantiationCount: depth?.maxInstantiationCount ?? 0, types: owners, milliseconds, summary, details },
+    remedy: (inline ? `Write the conditional type of ${generic} in place: ${inline}. ` : `Write the conditional type of ${generic} in place, with ${argument} as the checked type. `) +
+      direct + 'Measure again after the change.',
+    docs: PERFORMANCE_DOCS };
+}
+
 const chainText = names => names.join(' -> ');
 const selfText = (name, cycle) => cycle.length === 2 ? `${name} refers to itself.` : `${name} refers to itself: ${chainText(cycle)}.`;
 
@@ -331,6 +410,10 @@ function recursionDiagnosis({ signals, describe, checkSeconds, graph, base, comp
   const partial = graph ? partialConstraints(graph, base, site).find(p => owners.some(o => o.alias === p.generic &&
     o.aliasLocation?.file === p.genericLocation.file)) : null;
   if (partial) return partialConstraintDiagnosis({ site, siteLocation, partial, owners, depth, milliseconds,
+    share: interval ? share(milliseconds, checkSeconds) : null });
+  // The limit was hit outside the conditional type alias that gets an instantiation expression as a type argument.
+  const expression = graph ? instantiationExpressionArguments(graph, base, site).find(e => !owners.some(o => o.alias === e.generic)) : null;
+  if (expression) return instantiationExpressionDiagnosis({ site, siteLocation, found: expression, owners, depth, milliseconds,
     share: interval ? share(milliseconds, checkSeconds) : null });
   const name = lead?.alias ?? lead?.typeName ?? null;
   const summary = [];
@@ -539,6 +622,6 @@ export function buildDiagnoses(context) {
   if (context.graph && context.diagnostics) list.push(programLoadDiagnosis(context));
   if (context.signals) list.push(recursionDiagnosis(context), varianceDiagnosis(context.signals, context.describe, context.checkSeconds));
   // A diagnosis of a TS2589 error comes first: the compiler already reported an error for it.
-  const first = d => d.pattern === 'recursive-type-instantiation' || d.pattern === 'partial-constraint';
+  const first = d => ['recursive-type-instantiation', 'partial-constraint', 'instantiation-expression'].includes(d.pattern);
   return list.filter(Boolean).sort((a, b) => first(b) - first(a) || b.milliseconds - a.milliseconds).slice(0, MAX_DIAGNOSES);
 }

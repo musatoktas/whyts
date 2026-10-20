@@ -1,0 +1,184 @@
+{
+ "events": [
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5589308.924,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 959,
+    "instantiationDepth": 100,
+    "instantiationCount": 105
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5589882.903,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 2442,
+    "instantiationDepth": 100,
+    "instantiationCount": 112
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5610078.006,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 88648,
+    "instantiationDepth": 100,
+    "instantiationCount": 150
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5610858.002,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 90,
+    "instantiationDepth": 100,
+    "instantiationCount": 134
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5611328.476,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 88648,
+    "instantiationDepth": 100,
+    "instantiationCount": 150
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5611920.428,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 88648,
+    "instantiationDepth": 100,
+    "instantiationCount": 444
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5612268.763,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 90,
+    "instantiationDepth": 100,
+    "instantiationCount": 719
+   }
+  }
+ ],
+ "types": [
+  {
+   "id": 959,
+   "symbolName": "__object",
+   "recursionId": 783,
+   "firstDeclaration": {
+    "path": "{{base}}/src/p0.ts",
+    "start": {
+     "line": 3,
+     "character": 18
+    },
+    "end": {
+     "line": 3,
+     "character": 59
+    }
+   },
+   "flags": [
+    "Object"
+   ],
+   "display": "{ params: TObject<{ id: TString; }>; }"
+  },
+  {
+   "id": 2442,
+   "symbolName": "__object",
+   "recursionId": 1577,
+   "firstDeclaration": {
+    "path": "{{base}}/src/p0.ts",
+    "start": {
+     "line": 4,
+     "character": 15
+    },
+    "end": {
+     "line": 4,
+     "character": 100
+    }
+   },
+   "flags": [
+    "Object"
+   ],
+   "display": "{ body: TObject<{ name: TString; age: TNumber; tags: TArray<TString>; }>; }"
+  },
+  {
+   "id": 88648,
+   "symbolName": "NewElysia",
+   "recursionId": 32210,
+   "firstDeclaration": {
+    "path": "{{base}}/node_modules/elysia/dist/base.d.ts",
+    "start": {
+     "line": 7,
+     "character": 13
+    },
+    "end": {
+     "line": 7,
+     "character": 22
+    }
+   },
+   "flags": [
+    "TypeParameter",
+    "IncludesMissingType"
+   ]
+  },
+  {
+   "id": 90,
+   "symbolName": "Singleton",
+   "recursionId": 77,
+   "firstDeclaration": {
+    "path": "{{base}}/node_modules/elysia/dist/base.d.ts",
+    "start": {
+     "line": 3,
+     "character": 123
+    },
+    "end": {
+     "line": 3,
+     "character": 132
+    }
+   },
+   "flags": [
+    "TypeParameter",
+    "IncludesMissingType"
+   ]
+  }
+ ]
+}
