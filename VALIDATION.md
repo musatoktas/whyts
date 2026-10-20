@@ -1,3 +1,20 @@
+# v0.8.7 validation
+
+0.8.7 adds the diagnosis `instantiation-expression`: a type argument is an instantiation expression (`typeof f<T>`), it is given to a type alias whose body is a conditional type (`ReturnType`, `Parameters`), and resolving that alias hits TS2589. `whyts`, `whyts-mcp` and `server.json` have the version 0.8.7.
+
+Measured on 2026-10-20 in GitHub Actions, in musatoktas/oss-olcum, on the Elysia 2.0.0-beta.30 app of elysiajs/eden#274 with 90 plugins and the Eden constraints given 8 type arguments (tsc 5.9.3 and tsgo 7.0.0-dev.20260707.2 gave the same results):
+
+| Type | Result |
+| --- | --- |
+| `ReturnType<typeof treaty<App>>`, `ReturnType<typeof wrap<App>>`, `Parameters<typeof treaty<App>>` | TS2589 |
+| `type RT<T> = T extends (...args: any) => infer R ? R : any` with `typeof wrap<App>`, with and without a constraint, distributive or not | TS2589 |
+| the same conditional type written in place, with `typeof treaty<App>` or `typeof wrap<App>` | no error |
+| `Id<typeof wrap<App>>` where `Id<T> = T`, with and without a constraint | no error |
+| `ReturnType<typeof wrap>` where `wrap` is not generic | no error |
+| `Treaty.Instance<App>` and `interface Client extends Treaty.Instance<App> {}` | no error |
+
+Runs 39374273866, 39374711143, 39374920665 and 39375073621. In run 39374924576, 0.8.6 reported `recursive-type-instantiation` with the remedy "Stop the expansion of Elysia". In run 39375434682 the branch of pull request 25 reported `instantiation-expression` for `ReturnType<typeof treaty<App>>` with the conditional type in place and `Treaty.Instance<App, Head>` as remedies. The tests are in `test/diagnose.test.js`; the fixture `test/fixtures/diagnose/ts59-instantiation-expression.json` holds 7 events of the real trace. `ci.yml` passed on pull request 25.
+
 # v0.8.6 validation
 
 0.8.6 adds the diagnosis `partial-constraint`: a constraint gives a generic type fewer type arguments than it declares, the omitted parameters take their defaults, and the check of that constraint hits TS2589. `whyts`, `whyts-mcp` and `server.json` have the version 0.8.6.
