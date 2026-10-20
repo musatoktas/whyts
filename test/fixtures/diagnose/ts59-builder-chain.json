@@ -1,0 +1,189 @@
+{
+ "events": [
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5366183.777,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 125052,
+    "instantiationDepth": 100,
+    "instantiationCount": 166
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5366927.086,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 125052,
+    "instantiationDepth": 100,
+    "instantiationCount": 448
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5367261.431,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 95,
+    "instantiationDepth": 100,
+    "instantiationCount": 727
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5377215.801,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 125052,
+    "instantiationDepth": 100,
+    "instantiationCount": 166
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5377747.587,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 95,
+    "instantiationDepth": 100,
+    "instantiationCount": 726
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5377965.329,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 101,
+    "instantiationDepth": 100,
+    "instantiationCount": 993
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5378018.428,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 101,
+    "instantiationDepth": 100,
+    "instantiationCount": 996
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5378052.839,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 101,
+    "instantiationDepth": 100,
+    "instantiationCount": 999
+   }
+  },
+  {
+   "pid": 1,
+   "tid": 1,
+   "ph": "I",
+   "cat": "checkTypes",
+   "ts": 5391951.892,
+   "name": "instantiateType_DepthLimit",
+   "s": "g",
+   "args": {
+    "typeId": 95,
+    "instantiationDepth": 100,
+    "instantiationCount": 726
+   }
+  }
+ ],
+ "types": [
+  {
+   "id": 95,
+   "symbolName": "Volatile",
+   "firstDeclaration": {
+    "path": "{{base}}/node_modules/elysia/dist/base.d.ts",
+    "start": {
+     "line": 4,
+     "character": 113
+    },
+    "end": {
+     "line": 4,
+     "character": 121
+    }
+   },
+   "flags": [
+    "TypeParameter",
+    "IncludesMissingType"
+   ]
+  },
+  {
+   "id": 101,
+   "symbolName": "__type",
+   "firstDeclaration": {
+    "path": "{{base}}/node_modules/elysia/dist/base.d.ts",
+    "start": {
+     "line": 3,
+     "character": 166
+    },
+    "end": {
+     "line": 3,
+     "character": 174
+    }
+   },
+   "flags": [
+    "Object"
+   ],
+   "display": "{ typebox: {}; error: []; }"
+  },
+  {
+   "id": 125052,
+   "symbolName": "NewElysia",
+   "firstDeclaration": {
+    "path": "{{base}}/node_modules/elysia/dist/base.d.ts",
+    "start": {
+     "line": 7,
+     "character": 13
+    },
+    "end": {
+     "line": 7,
+     "character": 21
+    }
+   },
+   "flags": [
+    "TypeParameter",
+    "IncludesMissingType"
+   ]
+  }
+ ]
+}

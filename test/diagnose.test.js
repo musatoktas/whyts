@@ -263,6 +263,81 @@ test('instantiation expression: a type alias that is not a conditional type keep
   assert.equal(d.pattern, 'recursive-type-instantiation');
 });
 
+// Builder chain. ts59-builder-chain.json holds 9 of the 1404 depth-limit events of a real trace of an Elysia 2.0.0-beta.30 app whose
+// 128 plugins are joined in one chain of .use() calls (musatoktas/oss-olcum elysia-chain, run 39388012312, typescript 5.9.3, captured
+// on 2026-10-20). The declaration positions are rewritten to the stub below. In that app the limit was hit between 90 and 100 calls,
+// with 1 and with 8 routes per plugin. The same chain cut into variables kept the errors; 4 groups joined with .use() had none.
+const chainBase = `type DefaultEphemeral = { derive: {} }
+type AnyElysia = Elysia<any, any, any, any, any, any, any, any>
+declare class Elysia<const in out BasePath extends string = '', const in out Scope extends string = 'local', const in out Singleton = {}, const in out Definitions = { typebox: {}; error: [] },
+  const in out Metadata = {}, const in out Routes = {}, const in out Ephemeral = DefaultEphemeral, const in out Volatile = DefaultEphemeral> {
+  constructor(config?: { prefix?: BasePath })
+  '~Routes': Routes;
+  use<const NewElysia extends AnyElysia>(instance: NewElysia): Elysia<BasePath, Scope, Singleton, Definitions, Metadata, Routes & NewElysia['~Routes'], Ephemeral, Volatile>;
+  get<const Path extends string>(path: Path): Elysia<BasePath, Scope, Singleton, Definitions, Metadata, Routes & { [K in Path]: {} }, Ephemeral, Volatile>;
+}
+export { Elysia }
+`;
+const calls = (n, call = '.use(p)') => Array(n).fill(`\n  ${call}`).join('');
+const plugin = "import { Elysia } from 'elysia'\ndeclare const p: Elysia<'/p'>\n";
+
+function chainProject(t, api, at) {
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-chain-')));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const files = {
+    'node_modules/elysia/package.json': '{ "name": "elysia", "version": "0.0.0", "types": "dist/index.d.ts" }',
+    'node_modules/elysia/dist/index.d.ts': "export { Elysia } from './base'\n",
+    'node_modules/elysia/dist/base.d.ts': chainBase,
+    'src/api.ts': plugin + api,
+    'tsconfig.json': JSON.stringify({ compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, target: 'ES2022', module: 'ESNext',
+      moduleResolution: 'Bundler', types: [] }, include: ['src'] })
+  };
+  for (const [name, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(base, name)), { recursive: true });
+    fs.writeFileSync(path.join(base, name), text);
+  }
+  const graph = buildGraph(ts, readProject(base, ts));
+  const fixture = readFixture('ts59-builder-chain.json', base);
+  return buildDiagnoses({ signals: collectSignals(fixture.events), describe: typeDescriber(fixture.types, base, graph), checkSeconds: 4, graph, base,
+    compilerErrors: parseCompilerErrors(`src/api.ts(${at}): error TS2589: Type instantiation is excessively deep and possibly infinite.`, 5, base),
+    intervals: { sourceGroups: [{ file: 'src/api.ts', line: Number(at.split(',')[0]), milliseconds: 604 }], projectHotspots: [] } });
+}
+
+test('builder chain: 128 calls of .use() in one chain get groups, not a recursion remedy', t => {
+  const diagnoses = chainProject(t, `export const app = new Elysia({ prefix: '/api/v1' })${calls(128)}\n`, '3,20');
+  assert.equal(diagnoses.length, 1);
+  const d = diagnoses[0];
+  assert.equal(d.pattern, 'builder-chain');
+  assert.equal(d.confidence, 'measured');
+  assert.deepEqual(d.location, { file: 'src/api.ts', line: 3, character: 20 });
+  assert.equal(d.title, '128 calls of .use() build one Elysia type');
+  assert.equal(d.evidence.calls, 128);
+  assert.equal(d.evidence.statements, 1);
+  assert.deepEqual(d.evidence.methodLocation, { file: 'node_modules/elysia/dist/base.d.ts', line: 7, character: 3 });
+  assert.equal(d.evidence.limitEvents, 9);
+  assert.ok(d.evidence.types.every(o => o.alias === 'Elysia'), 'the limit events are inside Elysia, as in the trace');
+  assert.match(d.evidence.summary[1], /^The chain at this place calls \.use\(\) 128 times\. use takes and returns Elysia \(node_modules\/elysia\/dist\/base\.d\.ts:7\)\.$/);
+  assert.equal(d.remedy, 'Build the 128 calls as 4 separate Elysia values of at most 32 calls each. Then join those values with .use() on one Elysia. ' +
+    'Cutting the chain into variables is not enough: the type is still one chain. Measure again after the change.');
+  assert.equal(d.milliseconds, 604);
+});
+
+test('builder chain: a chain cut into variables is followed back to its start', t => {
+  const [d] = chainProject(t, `const a0 = new Elysia({ prefix: '/api/v1' })${calls(50)}\nexport const app = a0${calls(50)}\n`, '54,20');
+  assert.equal(d.pattern, 'builder-chain');
+  assert.equal(d.evidence.calls, 100);
+  assert.equal(d.evidence.statements, 2);
+  assert.match(d.evidence.summary[1], /calls \.use\(\) 100 times, across 2 statements\./);
+  assert.match(d.remedy, /^Build the 100 calls as 4 separate Elysia values of at most 25 calls each\. /);
+});
+
+test('builder chain: a short chain, and a method that does not take the class, keep the recursion diagnosis', t => {
+  const [short] = chainProject(t, `export const app = new Elysia({ prefix: '/api/v1' })${calls(20)}\n`, '3,20');
+  assert.equal(short.pattern, 'recursive-type-instantiation');
+  const [routes] = chainProject(t, `export const app = new Elysia({ prefix: '/api/v1' })${calls(128, ".get('/r')")}\n`, '3,20');
+  assert.equal(routes.pattern, 'recursive-type-instantiation', 'get takes a path, so groups joined with get are not possible');
+});
+
 // Variance diagnosis. The descriptors give the real type ids of the drizzle-orm trace a name and a declaration.
 function varianceCase(t, { scale = 1, declare = true } = {}) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-var-')));
@@ -323,6 +398,7 @@ test('remedies follow the instruction length rule: at most 20 words per sentence
   texts.push(buildDiagnoses({ signals: v.signals, describe: v.describe, checkSeconds: 7, graph: v.graph, base: v.base })[0].remedy);
   texts.push(partialProject(t)[0].remedy);
   texts.push(expressionProject(t, `${wrap}\nexport type W = ReturnType<typeof wrap<App>>`, '4,17')[0].remedy);
+  texts.push(chainProject(t, `export const app = new Elysia({ prefix: '/api/v1' })${calls(128)}\n`, '3,20')[0].remedy);
   for (const text of texts) for (const sentence of sentences(text)) assert.ok(sentence.split(/\s+/).length <= 20, sentence);
 });
 

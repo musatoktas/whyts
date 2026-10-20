@@ -381,6 +381,89 @@ function instantiationExpressionDiagnosis({ site, siteLocation, found, owners, d
     docs: PERFORMANCE_DOCS };
 }
 
+// A chain of calls that starts at an error position, followed through variables that hold the chain before it. The method called
+// most often must return the class that it is called on and take an instance of that class, as a plugin method of a builder does.
+export const BUILDER_CHAIN = {
+  minCalls: 32,   // fewer calls than this are not reported as a long chain
+  groupSize: 32   // largest group in the remedy
+};
+
+function builderChain(graph, base, error) {
+  if (!error?.file || !error.line || !graph.program) return null;
+  const source = findSource(path.resolve(base, error.file), graph);
+  if (!source) return null;
+  const { ts } = graph;
+  const pos = source.getPositionOfLineAndCharacter(error.line - 1, Math.max(0, (error.character ?? 1) - 1));
+  const top = nodeAt(ts, source, pos).find(n => ts.isCallExpression(n) && n.getStart(source) === pos);
+  if (!top) return null;
+  const checker = graph.checker ??= graph.program.getTypeChecker();
+  const calls = new Map();
+  let node = top, statements = 1;
+  for (let steps = 0; node && steps < 10000; steps++) {
+    if (ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node)) { node = node.expression; continue; }
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const name = node.expression.name.text;
+      const entry = calls.get(name) ?? { name, calls: 0, access: node.expression };
+      entry.calls++; calls.set(name, entry);
+      node = node.expression.expression;
+      continue;
+    }
+    const decl = ts.isIdentifier(node) && statements < 50 ? checker.getSymbolAtLocation(node)?.valueDeclaration : null;
+    if (!decl || !ts.isVariableDeclaration(decl) || decl.type || !decl.initializer) break;
+    node = decl.initializer; statements++;
+  }
+  const lead = [...calls.values()].sort((a, b) => b.calls - a.calls)[0];
+  if (!lead || lead.calls < BUILDER_CHAIN.minCalls) return null;
+  const methods = checker.getSymbolAtLocation(lead.access.name)?.declarations ?? [];
+  const nameOf = typeName => ts.isQualifiedName(typeName) ? typeName.right.text : typeName.text;
+  // A type node that is the class, a type parameter of the method constrained to it, or an alias of it.
+  const names = (type, method, className, depth = 0) => {
+    if (!type || depth > 3) return false;
+    if (ts.isUnionTypeNode(type)) return type.types.some(t => names(t, method, className, depth + 1));
+    if (!ts.isTypeReferenceNode(type)) return false;
+    const name = nameOf(type.typeName);
+    if (name === className) return true;
+    const parameter = method.typeParameters?.find(p => p.name.text === name);
+    if (parameter) return names(parameter.constraint, method, className, depth + 1);
+    let symbol = checker.getSymbolAtLocation(ts.isQualifiedName(type.typeName) ? type.typeName.right : type.typeName);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    return (symbol?.declarations ?? []).some(d => ts.isTypeAliasDeclaration(d) && names(d.type, method, className, depth + 1));
+  };
+  for (const method of methods) {
+    const owner = method.parent;
+    if (!(ts.isClassDeclaration(owner) || ts.isInterfaceDeclaration(owner)) || !owner.name) continue;
+    const className = owner.name.text;
+    const own = methods.filter(m => m.parent === owner);
+    if (!own.some(m => m.type && ts.isTypeReferenceNode(m.type) && nameOf(m.type.typeName) === className)) continue;
+    const takes = own.find(m => m.parameters?.some(p => names(p.type, m, className)));
+    if (!takes) continue;
+    const file = takes.getSourceFile(), at = file.getLineAndCharacterOfPosition(takes.getStart(file));
+    return { method: clean(lead.name), calls: lead.calls, statements, className: clean(className),
+      methodLocation: { file: display(base, path.resolve(file.fileName)), line: at.line + 1, character: at.character + 1 } };
+  }
+  return null;
+}
+
+function builderChainDiagnosis({ site, siteLocation, chain, owners, depth, milliseconds, share }) {
+  const { method, calls, statements, className, methodLocation } = chain;
+  const groups = Math.ceil(calls / BUILDER_CHAIN.groupSize), size = Math.ceil(calls / groups);
+  const summary = [`${site.code} at this place: ${site.message}`,
+    `The chain at this place calls .${method}() ${calls} times${statements > 1 ? `, across ${statements} statements` : ''}. ` +
+      `${method} takes and returns ${className} (${methodLocation.file}:${methodLocation.line}).`,
+    `Each call builds its ${className} type from the one before it. The compiler hit the instantiation limit inside ${className}.`].map(clean);
+  const details = [...summary, ...owners.map(o => `type #${o.typeId} ${o.typeName}: ${o.events} limit events, depth ${o.maxDepth}${o.alias ? `, inside ${o.alias}` : ''}`),
+    ...(depth?.maxInstantiationCount ? [`largest instantiation count in the events: ${depth.maxInstantiationCount}`] : [])];
+  return { pattern: 'builder-chain', confidence: 'measured',
+    title: `${calls} calls of .${method}() build one ${className} type`,
+    location: siteLocation, milliseconds, checkTimeShareUpperBoundPercent: share,
+    evidence: { event: depth?.events ? depth.event : null, compilerError: site, method, calls, statements, className, methodLocation,
+      limitEvents: depth?.events ?? 0, maxInstantiationCount: depth?.maxInstantiationCount ?? 0, types: owners, milliseconds, summary, details },
+    remedy: `Build the ${calls} calls as ${groups} separate ${className} values of at most ${size} calls each. ` +
+      `Then join those values with .${method}() on one ${className}. ` +
+      'Cutting the chain into variables is not enough: the type is still one chain. Measure again after the change.',
+    docs: PERFORMANCE_DOCS };
+}
+
 const chainText = names => names.join(' -> ');
 const selfText = (name, cycle) => cycle.length === 2 ? `${name} refers to itself.` : `${name} refers to itself: ${chainText(cycle)}.`;
 
@@ -414,6 +497,10 @@ function recursionDiagnosis({ signals, describe, checkSeconds, graph, base, comp
   // The limit was hit outside the conditional type alias that gets an instantiation expression as a type argument.
   const expression = graph ? instantiationExpressionArguments(graph, base, site).find(e => !owners.some(o => o.alias === e.generic)) : null;
   if (expression) return instantiationExpressionDiagnosis({ site, siteLocation, found: expression, owners, depth, milliseconds,
+    share: interval ? share(milliseconds, checkSeconds) : null });
+  // The limit was hit inside the class that a long chain of plugin calls at the error site builds.
+  const chain = graph ? builderChain(graph, base, site) : null;
+  if (chain && owners.some(o => o.alias === chain.className)) return builderChainDiagnosis({ site, siteLocation, chain, owners, depth, milliseconds,
     share: interval ? share(milliseconds, checkSeconds) : null });
   const name = lead?.alias ?? lead?.typeName ?? null;
   const summary = [];
@@ -622,6 +709,6 @@ export function buildDiagnoses(context) {
   if (context.graph && context.diagnostics) list.push(programLoadDiagnosis(context));
   if (context.signals) list.push(recursionDiagnosis(context), varianceDiagnosis(context.signals, context.describe, context.checkSeconds));
   // A diagnosis of a TS2589 error comes first: the compiler already reported an error for it.
-  const first = d => ['recursive-type-instantiation', 'partial-constraint', 'instantiation-expression'].includes(d.pattern);
+  const first = d => ['recursive-type-instantiation', 'partial-constraint', 'instantiation-expression', 'builder-chain'].includes(d.pattern);
   return list.filter(Boolean).sort((a, b) => first(b) - first(a) || b.milliseconds - a.milliseconds).slice(0, MAX_DIAGNOSES);
 }
