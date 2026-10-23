@@ -541,6 +541,8 @@ test('callback inference: an arrow function without parameter types, and NoInfer
   assert.deepEqual(callbackCase(t, 'ts59-callback-direct.json', 10.88, { form: 'whole' }).diagnoses, []);
 });
 
+const inlineFunction = '(ctx: import("./common").BotContext, next: () => Promise<void>) => next()';
+
 // One check of 1000 ms at the call on line 4 of a case file, with a comparison that covers a given share of it.
 function syntheticCall(t, argument, { covered = 0.01, typeArguments = '' } = {}) {
   const text = telegrafCall(argument).replace('composer.on(', `composer.on${typeArguments}(`);
@@ -556,7 +558,7 @@ function syntheticCall(t, argument, { covered = 0.01, typeArguments = '' } = {})
 }
 
 test('callback inference: a function with parameter types inline matches; type arguments and recorded time rule it out', t => {
-  const [inline] = syntheticCall(t, '(ctx: import('./common').BotContext, next: () => Promise<void>) => next()');
+  const [inline] = syntheticCall(t, inlineFunction);
   assert.equal(inline.pattern, 'callback-inference');
   assert.equal(inline.evidence.argumentKind, 'inline');
   assert.match(inline.title, /^on\(\) infers Filter from a function argument with parameter types: /);
@@ -629,7 +631,7 @@ test('remedies follow the instruction length rule: at most 20 words per sentence
   texts.push(expressionProject(t, `${wrap}\nexport type W = ReturnType<typeof wrap<App>>`, '4,17')[0].remedy);
   texts.push(chainProject(t, `export const app = new Elysia({ prefix: '/api/v1' })${calls(128)}\n`, '3,20')[0].remedy);
   texts.push(nestedProject(t, { apiFile: 'node_modules/@repro/api/index.d.ts', from: '@repro/api' })[0].remedy);
-  texts.push(callbackCase(t, 'ts59-callback-direct.json', 10.88).diagnoses[0].remedy, syntheticCall(t, '(ctx: import('./common').BotContext, next: () => Promise<void>) => next()')[0].remedy);
+  texts.push(callbackCase(t, 'ts59-callback-direct.json', 10.88).diagnoses[0].remedy, syntheticCall(t, inlineFunction)[0].remedy);
   for (const text of texts) for (const sentence of sentences(text)) assert.ok(sentence.split(/\s+/).length <= 20, sentence);
 });
 
