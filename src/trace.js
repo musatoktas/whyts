@@ -41,6 +41,21 @@ function milliseconds(ranges) {
   return (total + right - left) / 1000;
 }
 
+// Milliseconds of the first ranges that the second ranges also cover.
+function overlap(first, second) {
+  const merge = ranges => ranges.map(r => [...r]).sort((a, b) => a[0] - b[0]).reduce((out, r) => {
+    if (out.length && r[0] <= out.at(-1)[1]) out.at(-1)[1] = Math.max(out.at(-1)[1], r[1]); else out.push(r);
+    return out;
+  }, []);
+  const a = merge(first), b = merge(second);
+  let total = 0;
+  for (let i = 0, j = 0; i < a.length && j < b.length;) {
+    total += Math.max(0, Math.min(a[i][1], b[j][1]) - Math.max(a[i][0], b[j][0]));
+    if (a[i][1] < b[j][1]) i++; else j++;
+  }
+  return total / 1000;
+}
+
 function fileIntervals(spans, base, graph, include = () => true) {
   const files = new Map();
   for (const span of spans) {
@@ -235,8 +250,11 @@ export function traceDetails(events, descriptors, base, graph = null) {
         m.span.args.kind !== identifierKind(graph));
       const focus = useful.sort((a, b) => b.depth - a.depth || b.milliseconds - a.milliseconds)[0] ?? members[0];
       const shown = [focus, ...members.filter(m => m !== focus)].slice(0, 5);
+      // The part of the focus check that the trace explains: recorded type comparisons and checks nested in it.
+      const recorded = [...[...chain.comparisons.values()].flatMap(c => c.ranges), ...members.filter(m => m.depth > focus.depth).flatMap(m => m.ranges)];
       return { ...sourceLocation(focus.span, base, graph), event: focus.span.name, milliseconds: chain.milliseconds,
-        focusMilliseconds: focus.milliseconds, memberCount: members.length, relationship: 'same-thread temporal containment',
+        focusMilliseconds: focus.milliseconds, focusRecordedMilliseconds: overlap(focus.ranges, recorded),
+        memberCount: members.length, relationship: 'same-thread temporal containment',
         root: { ...sourceLocation(chain.span, base, graph), event: chain.span.name },
         members: shown.map(m => ({ ...sourceLocation(m.span, base, graph), event: m.span.name, milliseconds: m.milliseconds, depth: m.depth })),
         comparisons: orderedComparisons(chain.comparisons).slice(0, 3).map(describeComparison) };

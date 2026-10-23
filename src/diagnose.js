@@ -607,6 +607,140 @@ function recursionDiagnosis({ signals, describe, checkSeconds, graph, base, comp
     docs: PERFORMANCE_DOCS };
 }
 
+// ---- Callback inference ------------------------------------------------------------------------------
+// The trace has no event for type argument inference. A call to a generic function without type arguments, given a function
+// argument with its own type (an identifier, or a function whose parameters all have types), first infers the type parameters
+// from that argument through the full parameter type. With a large context type, that walk can be most of the check, and the
+// check of the call is then mostly time that no recorded comparison or nested check covers.
+// All limits must hold.
+export const CALLBACK_INFERENCE = {
+  minMilliseconds: 200,     // the check of the call
+  maxRecordedShare: 0.25    // the part of that check inside recorded type comparisons and nested checks
+};
+
+const unwrapExpression = (ts, node) => {
+  while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression?.(node) || ts.isNonNullExpression(node)) node = node.expression;
+  return node;
+};
+const unwrapType = (ts, node) => { while (node && ts.isParenthesizedTypeNode(node)) node = node.type; return node; };
+const isNoInfer = (ts, node) => ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && node.typeName.text === 'NoInfer' && node.typeArguments?.length === 1;
+
+// The type that an argument is inferred against: the parameter type, or the element type of a rest parameter
+// (T[], readonly T[], or a generic type with one type argument such as ReadonlyArray<T>).
+function inferenceTarget(ts, parameter) {
+  let type = unwrapType(ts, parameter.type);
+  if (!type || !parameter.dotDotDotToken || isNoInfer(ts, type)) return type;
+  if (ts.isTypeOperatorNode(type)) type = unwrapType(ts, type.type);
+  if (ts.isArrayTypeNode(type)) return unwrapType(ts, type.elementType);
+  if (ts.isTypeReferenceNode(type) && type.typeArguments?.length === 1) return unwrapType(ts, type.typeArguments[0]);
+  return type;
+}
+
+function mentions(ts, node, names) {
+  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && names.has(node.typeName.text)) return true;
+  return !!ts.forEachChild(node, child => mentions(ts, child, names) || undefined);
+}
+
+// The check of a call that a measured chain focuses on, when the call matches the shape above.
+function callbackInference(graph, base, group) {
+  if (!graph?.program || group.scope !== 'project' || !Number.isInteger(group.pos) || !Number.isInteger(group.end)) return null;
+  const source = findSource(path.resolve(base, group.file), graph);
+  if (!source) return null;
+  const { ts } = graph;
+  const call = nodeAt(ts, source, group.pos).find(n => ts.isCallExpression(n) && n.pos === group.pos && n.end === group.end);
+  if (!call || call.typeArguments?.length) return null;
+  const checker = graph.checker ??= graph.program.getTypeChecker();
+  const symbolOf = node => {
+    let symbol = checker.getSymbolAtLocation(node);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    return symbol;
+  };
+  const callee = unwrapExpression(ts, call.expression);
+  const name = ts.isPropertyAccessExpression(callee) ? callee.name : ts.isIdentifier(callee) ? callee : null;
+  if (!name) return null;
+  // Generic declarations of the callee: functions and methods, and variables with a generic function type.
+  const signatures = (symbolOf(name)?.declarations ?? []).map(d => ts.isFunctionLike(d) ? d : d.type && ts.isFunctionTypeNode(d.type) ? d.type : null)
+    .filter(d => d?.typeParameters?.length);
+  const hasCall = type => type.getCallSignatures().length > 0 || (type.isUnion() && type.types.some(hasCall));
+  // An argument with its own type: TypeScript infers from it before the arguments that need a contextual type.
+  // 'inline' is a function whose parameters all have types, 'reference' is a name of a function value.
+  const typedFunction = argument => {
+    const node = unwrapExpression(ts, argument);
+    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return node.parameters.length > 0 && node.parameters.every(p => p.type) ? 'inline' : null;
+    const id = ts.isPropertyAccessExpression(node) ? node.name : ts.isIdentifier(node) ? node : null;
+    const symbol = id && symbolOf(id);
+    const decl = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    if (!decl) return null;
+    if (ts.isFunctionDeclaration(decl) || ts.isMethodDeclaration(decl) || ts.isMethodSignature(decl)) return 'reference';
+    if (!(ts.isVariableDeclaration(decl) || ts.isPropertyDeclaration(decl) || ts.isPropertySignature(decl) || ts.isParameter(decl))) return null;
+    // Only a written type or a function initializer: the type of any other initializer could cost a check of its own.
+    if (decl.type) return ts.isFunctionTypeNode(decl.type) || hasCall(checker.getTypeFromTypeNode(decl.type)) ? 'reference' : null;
+    const init = decl.initializer && unwrapExpression(ts, decl.initializer);
+    return init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) ? 'reference' : null;
+  };
+  const text = node => clean(node.getText().replace(/\s+/g, ' ').trim().slice(0, 120));
+  const where = node => {
+    const file = node.getSourceFile(), at = file.getLineAndCharacterOfPosition(node.getStart(file));
+    return { file: display(base, path.resolve(file.fileName)), line: at.line + 1, character: at.character + 1 };
+  };
+  const found = [];
+  for (const signature of signatures) {
+    const names = new Set(signature.typeParameters.map(p => p.name.text));
+    const rest = signature.parameters.at(-1)?.dotDotDotToken ? signature.parameters.at(-1) : null;
+    call.arguments.forEach((argument, i) => {
+      const parameter = signature.parameters[i] ?? rest;
+      const target = parameter && inferenceTarget(ts, parameter);
+      if (!target || isNoInfer(ts, target) || !mentions(ts, target, names)) return;
+      const kind = typedFunction(argument);
+      if (!kind) return;
+      const typeParameters = signature.typeParameters.filter(p => mentions(ts, target, new Set([p.name.text]))).map(p => clean(p.name.text));
+      found.push({ argument: text(argument), argumentKind: kind, argumentLocation: where(argument), parameter: clean(parameter.name.getText()), rest: !!parameter.dotDotDotToken,
+        parameterType: text(target), typeParameters, declarationLocation: where(signature) });
+    });
+  }
+  if (!found.length) return null;
+  return { expression: text(call), function: clean(name.text), overloads: signatures.length,
+    matchingOverloads: new Set(found.map(f => `${f.declarationLocation.file}:${f.declarationLocation.line}:${f.declarationLocation.character}`)).size, ...found[0] };
+}
+
+function callbackInferenceDiagnoses({ graph, base, intervals, checkSeconds }) {
+  const list = [];
+  for (const group of intervals?.sourceGroups ?? []) {
+    const callMs = group.focusMilliseconds, recordedMs = group.focusRecordedMilliseconds;
+    if (!Number.isFinite(callMs) || !Number.isFinite(recordedMs) || callMs < CALLBACK_INFERENCE.minMilliseconds ||
+      recordedMs > CALLBACK_INFERENCE.maxRecordedShare * callMs) continue;
+    const found = callbackInference(graph, base, group);
+    if (!found) continue;
+    const { expression, function: fn, argument, argumentKind, parameter, rest, parameterType, typeParameters, declarationLocation } = found;
+    const tp = typeParameters.join(', ');
+    const named = argumentKind === 'reference';
+    const recordedPercent = Math.round(recordedMs / callMs * 1000) / 10;
+    const inDependency = declarationLocation.file.split('/').includes('node_modules');
+    const what = rest ? `the element type of ...${parameter}` : `the type of ${parameter}`;
+    const summary = [`The check of this call took ${Number(callMs.toFixed(1))} ms. Recorded type comparisons and nested checks cover ${Number(recordedMs.toFixed(1))} ms of it (${recordedPercent}%).`,
+      `The call gives no type arguments. ${fn} declares ${tp} (${declarationLocation.file}:${declarationLocation.line}), and ${what} uses ${typeParameters.length === 1 ? 'it' : 'them'}: ${parameterType}.`,
+      `${named ? argument : 'The function argument'} has its own type, so TypeScript also infers ${tp} from it. The trace has no event for inference: this is a match of the call shape, not a recorded cause.`].map(clean);
+    const details = [...summary, `${found.matchingOverloads} of ${found.overloads} generic declaration${found.overloads === 1 ? '' : 's'} of ${fn} match${found.overloads === 1 ? 'es' : ''}.`,
+      `check chain: ${Number(group.milliseconds.toFixed(1))} ms, ${group.memberCount} source checks`].map(clean);
+    list.push({ pattern: 'callback-inference', confidence: 'measured',
+      title: clean(`${fn}() infers ${tp} from ${named ? `the function argument ${argument}` : 'a function argument with parameter types'}: ${expression}`),
+      location: { file: group.file, line: group.line, character: group.character }, milliseconds: group.milliseconds,
+      checkTimeShareUpperBoundPercent: group.checkTimeShareUpperBoundPercent ?? share(group.milliseconds, checkSeconds),
+      evidence: { event: group.event, expression, function: fn, argument, argumentKind, argumentLocation: found.argumentLocation, parameter, rest, parameterType,
+        typeParameters, declarationLocation, overloads: found.overloads, matchingOverloads: found.matchingOverloads,
+        callMilliseconds: callMs, recordedMilliseconds: recordedMs, recordedPercent, milliseconds: group.milliseconds,
+        thresholds: { ...CALLBACK_INFERENCE }, summary, details },
+      remedy: `In the declaration of ${fn}, wrap ${what} in NoInfer<...> (TypeScript 5.4 or later). ` +
+        `Wrap the whole type, not only ${tp} inside it. Then ${tp} comes from the other arguments. ` +
+        (inDependency ? 'The declaration is in a dependency, so tell its maintainers. ' : '') +
+        'At the call site, give the type argument explicitly. ' +
+        (named ? `Or pass an arrow function without parameter types that calls ${argument}. ` : 'Or remove the parameter types of the function argument. ') +
+        'Measure again after the change.',
+      docs: PERFORMANCE_DOCS });
+  }
+  return list;
+}
+
 // ---- Program load ------------------------------------------------------------------------------------
 // A program can be large while the check is cheap: one import pulls hundreds of declaration files, and the compiler
 // spends its time and memory on reading, parsing and binding them. The signal is the program itself, not the trace.
@@ -794,6 +928,8 @@ export function buildDiagnoses(context) {
   // Program load needs no trace signal: it reads the import graph and the compiler counters.
   if (context.graph && context.diagnostics) list.push(programLoadDiagnosis(context));
   if (context.signals) list.push(recursionDiagnosis(context), varianceDiagnosis(context.signals, context.describe, context.checkSeconds));
+  // Callback inference reads the measured check chains and the call at their focus.
+  if (context.graph) list.push(...callbackInferenceDiagnoses(context));
   // A diagnosis of a TS2589 error comes first: the compiler already reported an error for it.
   const first = d => ['recursive-type-instantiation', 'partial-constraint', 'instantiation-expression', 'builder-chain', 'nested-declaration'].includes(d.pattern);
   return list.filter(Boolean).sort((a, b) => first(b) - first(a) || b.milliseconds - a.milliseconds).slice(0, MAX_DIAGNOSES);
