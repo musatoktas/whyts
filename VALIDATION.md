@@ -1,3 +1,19 @@
+# v0.8.10 validation
+
+0.8.10 adds the diagnosis `callback-inference`: the focus of a measured check chain is a call of 200 ms or more, recorded type comparisons and nested checks cover at most 25% of it, the call gives no type arguments, a generic declaration of the callee has a parameter (for a rest parameter, its element type) that uses its type parameters and is not wrapped in `NoInfer` as a whole, and the argument for it is a function with its own type. The trace has no event for inference, so the diagnosis is a match of the call shape and of the time that the trace does not explain. `sourceGroups` get the additive field `focusRecordedMilliseconds`. `whyts`, `whyts-mcp` and `server.json` have the version 0.8.10.
+
+Measured on 2026-10-23 in GitHub Actions, in musatoktas/oss-olcum `telegraf-2016.yml`, on telegraf 4.16.3 with `interface BotContext extends Context`, `composer = new Composer<BotContext>()` and a middleware with typed parameters (the shape of telegraf#2016). Run 39915675800, tsc 5.9.3, `tsc --extendedDiagnostics`, three runs each:
+
+| `composer.on(message('text'), middleware)` with | Check time |
+| --- | --- |
+| telegraf 4.16.3 | 10.85 s, 10.63 s, 10.54 s |
+| `NoInfer` around the middleware element type of the `on` declarations | 0.66 s, 0.64 s, 0.67 s |
+| `NoInfer` around `Filter` only, inside that type | 10.62 s, 10.66 s, 10.64 s |
+
+In the traced run of telegraf 4.16.3, the check of the call took 10810 ms, and the type comparisons inside it took 126 ms.
+
+0.8.9 reported "Slow check, no known pattern" for the call (run 39909236685). The branch of pull request 31 reported `callback-inference` for telegraf 4.16.3 and for the typings with `NoInfer` around `Filter` only. It reported no diagnosis for `(ctx, next) => middleware(ctx, next)` and for the typings with `NoInfer` around the element type (run 39916319374). The tests are in `test/diagnose.test.js`; the fixtures `test/fixtures/diagnose/ts59-callback-*.json` hold the check spans of the project files and the comparisons inside them from the real traces of run 39915675800. `ci.yml` passed on pull request 31.
+
 # v0.8.9 validation
 
 0.8.9 adds the diagnosis `nested-declaration`: the TS2589 site is a type or the name of a declaration, type aliases, interfaces and `typeof` lead from it to a variable with a written type in a declaration file, that type nests a generic type of the depth-limit events at least 8 levels deep. `whyts`, `whyts-mcp` and `server.json` have the version 0.8.9.
