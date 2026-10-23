@@ -12,8 +12,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import ts from 'typescript';
-import { buildGraph, readProject, parseCompilerErrors } from '../src/analyze.js';
-import { typeDescriber } from '../src/trace.js';
+import { buildGraph, readProject, parseCompilerErrors, withCheckShare } from '../src/analyze.js';
+import { typeDescriber, traceDetails, resolveTraceTypes } from '../src/trace.js';
 import { collectSignals, signalTypeIds, buildDiagnoses } from '../src/diagnose.js';
 import { renderReport } from '../src/report.js';
 
@@ -424,6 +424,149 @@ test('nested declaration: a shallow type, and a nested type in a source file, ke
   assert.equal(source.pattern, 'recursive-type-instantiation', 'a source file has no written-out inferred type');
 });
 
+// Callback inference. ts59-callback-*.json hold the check spans of the project files, the outermost type comparisons inside them,
+// the comparisons of 5 ms or more and their descriptors, from real traces of telegraf 4.16.3 (telegraf issue 2016, musatoktas/oss-olcum
+// telegraf-2016, run 39915675800, typescript 5.9.3, captured on 2026-10-23). The cases and common.ts are the files of that run.
+// The typings below are a stub with the shape of Composer.on. Its declaration positions differ from the real ones.
+// direct: composer.on(message('text'), middleware). wrapped: the same call with (ctx, next) => middleware(ctx, next).
+// noinfer: the direct call with the middleware element type of both on declarations wrapped in NoInfer. deep: the direct call
+// with NoInfer around Filter inside the middleware type. Check time of the traced runs: direct 10.88 s (the call 10810 ms,
+// comparisons inside it 126 ms), deep 10.82 s, wrapped 0.57 s, noinfer 0.69 s.
+const telegrafCommon = "import { Composer, Context } from 'telegraf'\n\nexport interface BotContext extends Context {\n  customProp: string\n}\n\n" +
+  'export const composer = new Composer<BotContext>()\n\nexport const middleware = (ctx: BotContext, next: () => Promise<void>) => {\n  ctx.customProp\n  return next()\n}\n\n' +
+  'export const plainComposer = new Composer<Context>()\n\nexport const plainMiddleware = (ctx: Context, next: () => Promise<void>) => {\n  return next()\n}\n';
+const telegrafCall = argument => `import { message } from 'telegraf/filters'\nimport { composer, middleware } from './common'\n\ncomposer.on(message('text'), ${argument})\n`;
+const telegrafContext = `export type UpdateType = 'message' | 'callback_query'
+export type MessageSubType = 'text' | 'photo'
+export interface Update { update_id: number; message?: { text?: string } }
+export type Guard<U> = (update: U) => boolean
+export type MountMap = { [T in UpdateType | MessageSubType]: Update }
+export declare class Context<U extends Update = Update> {
+  readonly update: U
+  reply(text: string): Promise<void>
+}
+export type NarrowedContext<C extends Context, U extends Update> = Context<U> & Omit<C, keyof Context>
+export type FilteredContext<Ctx extends Context, Filter extends UpdateType | Guard<Ctx['update']>> = Filter extends UpdateType ? NarrowedContext<Ctx, Update> : NarrowedContext<Ctx, Update>
+export default Context
+`;
+// whole: NoInfer around the element type. deep: NoInfer around Filter inside it.
+const telegrafComposer = (form = 'release') => {
+  const element = type => form === 'whole' ? `NoInfer<${type}>` : form === 'deep' ? type.replace(/Filter\]|Filter>/, m => `NoInfer<Filter>${m.slice(-1)}`) : type;
+  return `import Context, { FilteredContext, NarrowedContext, Guard, MountMap, UpdateType, MessageSubType } from './context'
+import { Middleware } from './middleware'
+type MaybeArray<T> = T | T[]
+type NonemptyReadonlyArray<T> = readonly [T, ...T[]]
+export declare class Composer<C extends Context> {
+  on<Filter extends UpdateType | Guard<C['update']>>(filters: MaybeArray<Filter>, ...fns: NonemptyReadonlyArray<${element('Middleware<FilteredContext<C, Filter>>')}>): this
+  on<Filter extends UpdateType | MessageSubType>(filters: MaybeArray<Filter>, ...fns: NonemptyReadonlyArray<${element('Middleware<NarrowedContext<C, MountMap[Filter]>>')}>): this
+  use(...fns: ReadonlyArray<Middleware<C>>): this
+}
+`;
+};
+
+function telegrafProject(t, { form = 'release', name = 'direct-text', text = telegrafCall('middleware') } = {}) {
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-callback-')));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const files = {
+    'node_modules/telegraf/package.json': JSON.stringify({ name: 'telegraf', version: '0.0.0', types: 'typings/index.d.ts',
+      exports: { '.': { types: './typings/index.d.ts' }, './filters': { types: './typings/filters.d.ts' } } }),
+    'node_modules/telegraf/typings/index.d.ts': "export { Composer } from './composer'\nexport { Context } from './context'\n",
+    'node_modules/telegraf/typings/context.d.ts': telegrafContext,
+    'node_modules/telegraf/typings/middleware.d.ts': "import { Context } from './context'\nexport type MiddlewareFn<C extends Context> = (ctx: C, next: () => Promise<void>) => Promise<unknown> | void\n" +
+      'export interface MiddlewareObj<C extends Context> { middleware: () => MiddlewareFn<C> }\nexport type Middleware<C extends Context> = MiddlewareFn<C> | MiddlewareObj<C>\n',
+    'node_modules/telegraf/typings/composer.d.ts': telegrafComposer(form),
+    'node_modules/telegraf/typings/filters.d.ts': "import type { Update } from './context'\nexport declare const message: <K extends string>(...keys: K[]) => (update: Update) => update is Update\n",
+    'cases/common.ts': telegrafCommon,
+    [`cases/${name}.ts`]: text,
+    'tsconfig.json': JSON.stringify({ compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, target: 'ES2022', module: 'ESNext',
+      moduleResolution: 'Bundler', types: [] }, files: [`cases/${name}.ts`] })
+  };
+  for (const [file, content] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(base, file)), { recursive: true });
+    fs.writeFileSync(path.join(base, file), content);
+  }
+  return { base, graph: buildGraph(ts, readProject(base, ts)) };
+}
+
+// The same steps as analyze: chains from the trace events, descriptors, the share of Check time, then the diagnoses.
+function diagnoseTrace({ base, graph }, { events, types }, checkSeconds) {
+  const details = resolveTraceTypes(traceDetails(events, [], base, graph), types, base, graph);
+  const sourceGroups = withCheckShare(details.sourceGroups, checkSeconds);
+  return { sourceGroups, diagnoses: buildDiagnoses({ signals: collectSignals(events), describe: typeDescriber(types, base, graph), checkSeconds, graph, base,
+    compilerErrors: parseCompilerErrors('', 5, base), intervals: { sourceGroups, projectHotspots: withCheckShare(details.projectHotspots, checkSeconds) } }) };
+}
+
+function callbackCase(t, fixtureName, checkSeconds, options = {}) {
+  const project = telegrafProject(t, options);
+  return diagnoseTrace(project, readFixture(fixtureName, project.base), checkSeconds);
+}
+
+test('callback inference: composer.on(message(\'text\'), middleware) spends its check outside recorded comparisons', t => {
+  const { sourceGroups, diagnoses } = callbackCase(t, 'ts59-callback-direct.json', 10.88);
+  assert.equal(diagnoses.length, 1);
+  const d = diagnoses[0];
+  assert.equal(d.pattern, 'callback-inference');
+  assert.equal(d.confidence, 'measured');
+  assert.deepEqual(d.location, { file: 'cases/direct-text.ts', line: 4, character: 1 });
+  assert.equal(d.title, "on() infers Filter from the function argument middleware: composer.on(message('text'), middleware)");
+  assert.equal(d.milliseconds, sourceGroups[0].milliseconds);
+  assert.ok(d.milliseconds > 8000, String(d.milliseconds));
+  assert.ok(d.evidence.recordedPercent < 5, String(d.evidence.recordedPercent));
+  assert.equal(d.evidence.argumentKind, 'reference');
+  assert.deepEqual(d.evidence.typeParameters, ['Filter']);
+  assert.equal(d.evidence.parameter, 'fns');
+  assert.equal(d.evidence.rest, true);
+  assert.equal(d.evidence.parameterType, 'Middleware<FilteredContext<C, Filter>>');
+  assert.deepEqual(d.evidence.declarationLocation, { file: 'node_modules/telegraf/typings/composer.d.ts', line: 6, character: 3 });
+  assert.equal(d.evidence.overloads, 2);
+  assert.equal(d.evidence.matchingOverloads, 2);
+  assert.match(d.evidence.summary[0], /^The check of this call took \d+(\.\d)? ms\. Recorded type comparisons and nested checks cover \d+(\.\d)? ms of it \(\d+(\.\d)?%\)\.$/);
+  assert.equal(d.evidence.summary[1], 'The call gives no type arguments. on declares Filter (node_modules/telegraf/typings/composer.d.ts:6), and the element type of ...fns uses it: Middleware<FilteredContext<C, Filter>>.');
+  assert.match(d.evidence.summary[2], /this is a match of the call shape, not a recorded cause\.$/);
+  assert.equal(d.remedy, 'In the declaration of on, wrap the element type of ...fns in NoInfer<...> (TypeScript 5.4 or later). ' +
+    'Wrap the whole type, not only Filter inside it. Then Filter comes from the other arguments. The declaration is in a dependency, so tell its maintainers. ' +
+    'At the call site, give the type argument explicitly. Or pass an arrow function without parameter types that calls middleware. Measure again after the change.');
+});
+
+test('callback inference: NoInfer around Filter alone still matches; the real trace of that form is as slow', t => {
+  const [d] = callbackCase(t, 'ts59-callback-deep.json', 10.82, { form: 'deep' }).diagnoses;
+  assert.equal(d.pattern, 'callback-inference');
+  assert.equal(d.evidence.parameterType, 'Middleware<FilteredContext<C, NoInfer<Filter>>>');
+});
+
+test('callback inference: an arrow function without parameter types, and NoInfer around the element type, give no diagnosis', t => {
+  assert.deepEqual(callbackCase(t, 'ts59-callback-wrapped.json', 0.57, { name: 'wrapped-text', text: telegrafCall('(ctx, next) => middleware(ctx, next)') }).diagnoses, []);
+  assert.deepEqual(callbackCase(t, 'ts59-callback-noinfer.json', 0.69, { form: 'whole' }).diagnoses, []);
+  // The slow trace with the NoInfer typings: the syntax alone rules the call out.
+  assert.deepEqual(callbackCase(t, 'ts59-callback-direct.json', 10.88, { form: 'whole' }).diagnoses, []);
+});
+
+// One check of 1000 ms at the call on line 4 of a case file, with a comparison that covers a given share of it.
+function syntheticCall(t, argument, { covered = 0.01, typeArguments = '' } = {}) {
+  const text = telegrafCall(argument).replace('composer.on(', `composer.on${typeArguments}(`);
+  const project = telegrafProject(t, { name: 'call', text });
+  const file = path.join(project.base, 'cases/call.ts');
+  const statement = project.graph.files.get(file).statements.at(-1);
+  const call = statement.expression;
+  const span = (name, start, duration, args) => ({ ph: 'X', pid: 1, tid: 1, name, ts: start, dur: duration, args });
+  const events = [span('checkSourceFile', 0, 1100000, { path: file }),
+    span('checkExpression', 1000, 1000000, { path: file, pos: call.pos, end: call.end, kind: ts.SyntaxKind.CallExpression }),
+    span('structuredTypeRelatedTo', 2000, 1000000 * covered, { sourceId: 1, targetId: 2 })];
+  return diagnoseTrace(project, { events, types: [] }, 1.2).diagnoses;
+}
+
+test('callback inference: a function with parameter types inline matches; type arguments and recorded time rule it out', t => {
+  const [inline] = syntheticCall(t, '(ctx: import('./common').BotContext, next: () => Promise<void>) => next()');
+  assert.equal(inline.pattern, 'callback-inference');
+  assert.equal(inline.evidence.argumentKind, 'inline');
+  assert.match(inline.title, /^on\(\) infers Filter from a function argument with parameter types: /);
+  assert.match(inline.remedy, / Or remove the parameter types of the function argument\. /);
+  assert.equal(inline.milliseconds, 1000);
+  assert.deepEqual(syntheticCall(t, 'middleware', { typeArguments: "<'message'>" }), [], 'the type argument is given');
+  assert.deepEqual(syntheticCall(t, 'middleware', { covered: 0.5 }), [], 'comparisons cover half of the check');
+  assert.equal(syntheticCall(t, 'middleware', { covered: 0.2 })[0].pattern, 'callback-inference');
+});
+
 // Variance diagnosis. The descriptors give the real type ids of the drizzle-orm trace a name and a declaration.
 function varianceCase(t, { scale = 1, declare = true } = {}) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'whyts-var-')));
@@ -486,6 +629,7 @@ test('remedies follow the instruction length rule: at most 20 words per sentence
   texts.push(expressionProject(t, `${wrap}\nexport type W = ReturnType<typeof wrap<App>>`, '4,17')[0].remedy);
   texts.push(chainProject(t, `export const app = new Elysia({ prefix: '/api/v1' })${calls(128)}\n`, '3,20')[0].remedy);
   texts.push(nestedProject(t, { apiFile: 'node_modules/@repro/api/index.d.ts', from: '@repro/api' })[0].remedy);
+  texts.push(callbackCase(t, 'ts59-callback-direct.json', 10.88).diagnoses[0].remedy, syntheticCall(t, '(ctx: import('./common').BotContext, next: () => Promise<void>) => next()')[0].remedy);
   for (const text of texts) for (const sentence of sentences(text)) assert.ok(sentence.split(/\s+/).length <= 20, sentence);
 });
 

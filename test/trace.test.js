@@ -114,8 +114,20 @@ test('one temporal chain leaves room for other hotspots and focuses a costly def
   assert.equal(chain.root.pos, args.pos);
   assert.equal(chain.pos, 3);
   assert.equal(chain.focusMilliseconds, 98.6);
+  assert.equal(chain.focusRecordedMilliseconds, 98.5, 'the identifier check nested in the focus');
   assert.equal(chain.members.length, 5);
   assert.ok(chain.members.reduce((sum, m) => sum + m.milliseconds, 0) > chain.milliseconds);
+});
+
+test('the recorded part of a focus check is the union of nested checks and comparisons inside it', t => {
+  const { base, graph, args, event } = fixture(t);
+  const details = traceDetails([event('checkExpression', 0, 100000, { ...args, kind: ts.SyntaxKind.CallExpression }),
+    event('checkExpression', 10000, 10000, { ...args, pos: args.pos + 2, end: args.end - 2, kind: ts.SyntaxKind.CallExpression }),
+    event('structuredTypeRelatedTo', 15000, 25000, { sourceId: 1, targetId: 2 }),
+    event('structuredTypeRelatedTo', 120000, 5000, { sourceId: 1, targetId: 2 })], [], base, graph);
+  const [chain] = details.sourceGroups;
+  assert.equal(chain.focusMilliseconds, 100);
+  assert.equal(chain.focusRecordedMilliseconds, 30, '10 to 20 ms and 15 to 40 ms overlap; the comparison after the check is outside it');
 });
 
 test('chains isolate files and threads, union repeated root intervals and hydrate selected comparisons', t => {
